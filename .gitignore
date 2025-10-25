@@ -1,0 +1,10 @@
+# Build artifacts
+build/
+*.bin
+
+# SDK config generated during builds
+sdkconfig
+sdkconfig.old
+
+# IDE/Editor settings
+.vscode/
