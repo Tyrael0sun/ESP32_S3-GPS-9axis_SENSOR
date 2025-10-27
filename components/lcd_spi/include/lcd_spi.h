@@ -10,6 +10,7 @@ extern "C" {
 
 esp_err_t lcd_spi_init(void);
 esp_err_t lcd_spi_set_backlight_percent(uint8_t percent);
+esp_err_t lcd_spi_install_log_sink(void);
 
 #ifdef CONFIG_LCD_SPI_CREATE_PANEL_IO
 #include "esp_lcd_panel_io.h"

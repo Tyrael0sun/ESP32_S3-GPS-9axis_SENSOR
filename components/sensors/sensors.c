@@ -20,7 +20,15 @@
 #define LSM6DSR_CTRL1_XL            0x10
 #define LSM6DSR_CTRL2_G             0x11
 #define LSM6DSR_CTRL3_C             0x12
+#define LSM6DSR_CTRL4_C             0x13
+#define LSM6DSR_CTRL6_C             0x15
+#define LSM6DSR_CTRL9_XL            0x18
+#define LSM6DSR_CTRL10_C            0x19
 #define LSM6DSR_OUT_TEMP_L          0x20
+#define LSM6DSR_OUTX_L_G            0x22
+#define LSM6DSR_OUTX_L_A            0x28
+#define LSM6DSR_ACCEL_SENSITIVITY_G 0.000061f    // g/LSB @ ±2g
+#define LSM6DSR_GYRO_SENSITIVITY_DPS 0.07f       // dps/LSB @ ±2000 dps
 
 #define LIS2MDL_ADDR                0x1E
 #define LIS2MDL_WHO_AM_I_REG        0x4F
@@ -28,6 +36,8 @@
 #define LIS2MDL_CFG_REG_A           0x60
 #define LIS2MDL_CFG_REG_C           0x62
 #define LIS2MDL_TEMP_OUT_L          0x6E
+#define LIS2MDL_OUTX_L              0x68
+#define LIS2MDL_SENSITIVITY_UT      0.15f        // µT/LSB
 
 #define BMP388_ADDR                 0x76
 #define BMP388_CHIP_ID_REG          0x00
@@ -87,6 +97,16 @@ static sensor_snapshot_t s_snapshot;
 static bmp388_calib_data_t s_bmp_calib;
 static bool s_initialized;
 
+static void set_nan_vector(float vec[3])
+{
+    if (!vec) {
+        return;
+    }
+    vec[0] = NAN;
+    vec[1] = NAN;
+    vec[2] = NAN;
+}
+
 static sensor_snapshot_t snapshot_defaults(void)
 {
 	return (sensor_snapshot_t){
@@ -96,6 +116,9 @@ static sensor_snapshot_t snapshot_defaults(void)
 		.imu_temperature_c = NAN,
 		.mag_temperature_c = NAN,
 		.press_temperature_c = NAN,
+		.imu_accel_mps2 = {NAN, NAN, NAN},
+		.imu_gyro_dps = {NAN, NAN, NAN},
+		.mag_uT = {NAN, NAN, NAN},
 	};
 }
 
@@ -157,9 +180,13 @@ static esp_err_t lsm6dsr_configure(void)
 	if (!s_lsm6dsr_dev) {
 		return ESP_ERR_INVALID_STATE;
 	}
-	esp_err_t err = i2c_device_write_byte(s_lsm6dsr_dev, LSM6DSR_CTRL3_C, 0x44);
-	err |= i2c_device_write_byte(s_lsm6dsr_dev, LSM6DSR_CTRL1_XL, 0x60);
-	err |= i2c_device_write_byte(s_lsm6dsr_dev, LSM6DSR_CTRL2_G, 0x60);
+	esp_err_t err = i2c_device_write_byte(s_lsm6dsr_dev, LSM6DSR_CTRL3_C, 0x44);   // BDU=1, IF_INC=1
+	err |= i2c_device_write_byte(s_lsm6dsr_dev, LSM6DSR_CTRL4_C, 0x02);             // Disable I3C, keep I2C enabled
+	err |= i2c_device_write_byte(s_lsm6dsr_dev, LSM6DSR_CTRL9_XL, 0x00);            // Enable accel XYZ
+	err |= i2c_device_write_byte(s_lsm6dsr_dev, LSM6DSR_CTRL10_C, 0x00);            // Enable gyro XYZ
+	err |= i2c_device_write_byte(s_lsm6dsr_dev, LSM6DSR_CTRL6_C, 0x00);             // Default full performance
+	err |= i2c_device_write_byte(s_lsm6dsr_dev, LSM6DSR_CTRL1_XL, 0x60);            // Accel 416 Hz, ±2g
+	err |= i2c_device_write_byte(s_lsm6dsr_dev, LSM6DSR_CTRL2_G, 0x6C);             // Gyro 416 Hz, ±2000 dps
 	return err;
 }
 
@@ -200,6 +227,92 @@ static esp_err_t lis2mdl_read_temperature(float *temperature_c)
 	}
 	int16_t raw = (int16_t)((buffer[1] << 8) | buffer[0]);
 	*temperature_c = 25.0f + ((float)raw / 8.0f);
+	return ESP_OK;
+}
+
+static esp_err_t lsm6dsr_read_motion(float accel_mps2[3], float gyro_dps[3])
+{
+	if (!s_lsm6dsr_dev) {
+		return ESP_ERR_INVALID_STATE;
+	}
+
+	uint8_t buffer[6] = {0};
+	esp_err_t err = i2c_device_read(s_lsm6dsr_dev, LSM6DSR_OUTX_L_G | 0x80, buffer, sizeof(buffer));
+	if (err != ESP_OK) {
+		return err;
+	}
+
+	int16_t raw_g[3] = {
+		(int16_t)((buffer[1] << 8) | buffer[0]),
+		(int16_t)((buffer[3] << 8) | buffer[2]),
+		(int16_t)((buffer[5] << 8) | buffer[4])
+	};
+
+	ESP_LOGD(TAG, "LSM6DSR raw gyro: %d %d %d", raw_g[0], raw_g[1], raw_g[2]);
+
+	err = i2c_device_read(s_lsm6dsr_dev, LSM6DSR_OUTX_L_A | 0x80, buffer, sizeof(buffer));
+	if (err != ESP_OK) {
+		return err;
+	}
+
+	int16_t raw_a[3] = {
+		(int16_t)((buffer[1] << 8) | buffer[0]),
+		(int16_t)((buffer[3] << 8) | buffer[2]),
+		(int16_t)((buffer[5] << 8) | buffer[4])
+	};
+
+	ESP_LOGD(TAG, "LSM6DSR raw accel: %d %d %d", raw_a[0], raw_a[1], raw_a[2]);
+
+	const float accel_scale = LSM6DSR_ACCEL_SENSITIVITY_G * 9.80665f;
+	const int axis_map[3][2] = {
+		{0, -1}, // X axis inverted
+		{1, 1},  // Y axis unchanged
+		{2, -1}  // Z axis inverted
+	};
+
+	if (gyro_dps) {
+		for (int i = 0; i < 3; ++i) {
+			int idx = axis_map[i][0];
+			int sign = axis_map[i][1];
+			gyro_dps[i] = (float)raw_g[idx] * LSM6DSR_GYRO_SENSITIVITY_DPS * (float)sign;
+		}
+	}
+
+	if (accel_mps2) {
+		for (int i = 0; i < 3; ++i) {
+			int idx = axis_map[i][0];
+			int sign = axis_map[i][1];
+			accel_mps2[i] = (float)raw_a[idx] * accel_scale * (float)sign;
+		}
+	}
+
+	return ESP_OK;
+}
+
+static esp_err_t lis2mdl_read_magnetic(float mag_uT[3])
+{
+	if (!s_lis2mdl_dev) {
+		return ESP_ERR_INVALID_STATE;
+	}
+
+	uint8_t buffer[6] = {0};
+	esp_err_t err = i2c_device_read(s_lis2mdl_dev, LIS2MDL_OUTX_L | 0x80, buffer, sizeof(buffer));
+	if (err != ESP_OK) {
+		return err;
+	}
+
+	int16_t raw_x = (int16_t)((buffer[1] << 8) | buffer[0]);
+	int16_t raw_y = (int16_t)((buffer[3] << 8) | buffer[2]);
+	int16_t raw_z = (int16_t)((buffer[5] << 8) | buffer[4]);
+
+	float mapped[3] = {
+		(float)raw_y * LIS2MDL_SENSITIVITY_UT,      // Final X = swapped Y (no inversion)
+		(float)(-raw_x) * LIS2MDL_SENSITIVITY_UT,   // Final Y = inverted X
+		(float)(-raw_z) * LIS2MDL_SENSITIVITY_UT    // Final Z = inverted Z
+	};
+
+	memcpy(mag_uT, mapped, sizeof(mapped));
+
 	return ESP_OK;
 }
 
@@ -325,6 +438,45 @@ static esp_err_t sensors_update_temperatures(sensor_snapshot_t *working)
 	return overall;
 }
 
+static esp_err_t sensors_update_motion(sensor_snapshot_t *working)
+{
+	esp_err_t overall = ESP_OK;
+
+	if (working->imu_present && s_lsm6dsr_dev) {
+		float accel[3] = {0};
+		float gyro[3] = {0};
+		esp_err_t err = lsm6dsr_read_motion(accel, gyro);
+		if (err == ESP_OK) {
+			memcpy(working->imu_accel_mps2, accel, sizeof(accel));
+			memcpy(working->imu_gyro_dps, gyro, sizeof(gyro));
+		} else {
+			overall = err;
+			set_nan_vector(working->imu_accel_mps2);
+			set_nan_vector(working->imu_gyro_dps);
+			ESP_LOGW(TAG, "Failed to read LSM6DSR motion (%s)", esp_err_to_name(err));
+		}
+	} else {
+		set_nan_vector(working->imu_accel_mps2);
+		set_nan_vector(working->imu_gyro_dps);
+	}
+
+	if (working->mag_present && s_lis2mdl_dev) {
+		float mag[3] = {0};
+		esp_err_t err = lis2mdl_read_magnetic(mag);
+		if (err == ESP_OK) {
+			memcpy(working->mag_uT, mag, sizeof(mag));
+		} else {
+			overall = (overall == ESP_OK) ? err : overall;
+			set_nan_vector(working->mag_uT);
+			ESP_LOGW(TAG, "Failed to read LIS2MDL magnetic field (%s)", esp_err_to_name(err));
+		}
+	} else {
+		set_nan_vector(working->mag_uT);
+	}
+
+	return overall;
+}
+
 esp_err_t sensors_init(void)
 {
 	if (!s_state_lock) {
@@ -383,6 +535,10 @@ esp_err_t sensors_init(void)
 	working.press_present = press_present;
 
 	esp_err_t initial_read_err = sensors_update_temperatures(&working);
+	esp_err_t motion_err = sensors_update_motion(&working);
+	if (initial_read_err == ESP_OK && motion_err != ESP_OK) {
+		initial_read_err = motion_err;
+	}
 	if (initial_read_err != ESP_OK) {
 		ESP_LOGW(TAG, "Initial sensor read had issues (%s)", esp_err_to_name(initial_read_err));
 	}
@@ -415,11 +571,18 @@ esp_err_t sensors_update(void)
 	xSemaphoreGive(s_state_lock);
 
 	esp_err_t err = sensors_update_temperatures(&working);
+	esp_err_t motion_err = sensors_update_motion(&working);
+	if (err == ESP_OK && motion_err != ESP_OK) {
+		err = motion_err;
+	}
 
 	if (xSemaphoreTake(s_state_lock, portMAX_DELAY) == pdTRUE) {
 		s_snapshot.imu_temperature_c = working.imu_temperature_c;
 		s_snapshot.mag_temperature_c = working.mag_temperature_c;
 		s_snapshot.press_temperature_c = working.press_temperature_c;
+		memcpy(s_snapshot.imu_accel_mps2, working.imu_accel_mps2, sizeof(working.imu_accel_mps2));
+		memcpy(s_snapshot.imu_gyro_dps, working.imu_gyro_dps, sizeof(working.imu_gyro_dps));
+		memcpy(s_snapshot.mag_uT, working.mag_uT, sizeof(working.mag_uT));
 		xSemaphoreGive(s_state_lock);
 	}
 

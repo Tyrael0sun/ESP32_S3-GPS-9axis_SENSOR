@@ -12,6 +12,7 @@
 
 typedef struct {
     float battery_voltage;
+    float battery_adc_voltage;
     bool charging;
 } board_state_t;
 

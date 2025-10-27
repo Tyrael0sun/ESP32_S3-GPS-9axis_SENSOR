@@ -88,13 +88,13 @@ static void encoder_monitor_task(void *arg)
             int32_t steps = s_pending_counts / ENCODER_COUNTS_PER_STEP;
             if (steps != 0) {
                 s_pending_counts -= steps * ENCODER_COUNTS_PER_STEP;
-                s_position += steps;
+                s_position -= steps;
             }
             const int32_t position = s_position;
             const int32_t pending = s_pending_counts;
             portEXIT_CRITICAL(&s_count_lock);
             if (steps != 0) {
-                ESP_LOGI(TAG, "encoder steps=%d pending=%ld position=%ld", steps, (long)pending, (long)position);
+                ESP_LOGI(TAG, "encoder steps=%ld pending=%ld position=%ld", (long)(-steps), (long)pending, (long)position);
             }
         }
 

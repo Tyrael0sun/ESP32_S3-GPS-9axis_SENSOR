@@ -21,7 +21,7 @@
 
 #define GPIO_GNSS_LDO_EN    GPIO_NUM_14
 #define GPIO_CHRG_STATUS    GPIO_NUM_21
-#define BATTERY_DIVIDER     2.0f
+#define BATTERY_DIVIDER     2.0f       // 2:1 divider, battery voltage is twice the ADC voltage
 #define BATTERY_SAMPLES     8
 #define BATTERY_SAMPLE_US   500
 
@@ -36,7 +36,8 @@ static const char *TAG = "BOARD";
 
 static SemaphoreHandle_t s_lock;
 static board_state_t s_state = {
-    .battery_voltage = 0.0f,
+    .battery_voltage = NAN,
+    .battery_adc_voltage = NAN,
     .charging = false,
 };
 static i2c_master_bus_handle_t s_i2c_bus;
@@ -101,6 +102,7 @@ static esp_err_t board_configure_adc(void)
     };
     if (adc_cali_create_scheme_curve_fitting(&cali_cfg, &s_adc_cali) == ESP_OK) {
         s_adc_cali_enabled = true;
+        ESP_LOGI(TAG, "ADC calibration: curve fitting scheme active");
     }
 #elif ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
     adc_cali_line_fitting_config_t cali_cfg = {
@@ -110,16 +112,21 @@ static esp_err_t board_configure_adc(void)
     };
     if (adc_cali_create_scheme_line_fitting(&cali_cfg, &s_adc_cali) == ESP_OK) {
         s_adc_cali_enabled = true;
+        ESP_LOGI(TAG, "ADC calibration: line fitting scheme active");
     }
 #endif
+
+    if (!s_adc_cali_enabled) {
+        ESP_LOGW(TAG, "ADC calibration not available; using nominal reference");
+    }
 
     return ESP_OK;
 }
 
-static esp_err_t board_sample_battery(float *voltage_v)
+static esp_err_t board_sample_battery(float *voltage_v, float *adc_voltage_v)
 {
     int samples = 0;
-    int64_t accum_mv = 0;
+    double accum_mv = 0.0;
 
     for (int i = 0; i < BATTERY_SAMPLES; ++i) {
         int raw = 0;
@@ -132,7 +139,7 @@ static esp_err_t board_sample_battery(float *voltage_v)
                 sample_mv = (int)((raw * 3300.0f) / 4095.0f);
             }
         }
-        accum_mv += sample_mv;
+        accum_mv += (double)sample_mv;
         samples++;
         esp_rom_delay_us(BATTERY_SAMPLE_US);
     }
@@ -141,7 +148,10 @@ static esp_err_t board_sample_battery(float *voltage_v)
         return ESP_FAIL;
     }
 
-    float average_mv = (float)accum_mv / (float)samples;
+    float average_mv = (float)(accum_mv / (double)samples);
+    if (adc_voltage_v) {
+        *adc_voltage_v = average_mv / 1000.0f;
+    }
     *voltage_v = (average_mv / 1000.0f) * BATTERY_DIVIDER;
     return ESP_OK;
 }
@@ -156,10 +166,10 @@ static esp_err_t board_configure_adc(void)
     return ESP_OK;
 }
 
-static esp_err_t board_sample_battery(float *voltage_v)
+static esp_err_t board_sample_battery(float *voltage_v, float *adc_voltage_v)
 {
     int samples = 0;
-    int64_t accum_mv = 0;
+    double accum_mv = 0.0;
 
     for (int i = 0; i < BATTERY_SAMPLES; ++i) {
         int raw = 0;
@@ -170,7 +180,7 @@ static esp_err_t board_sample_battery(float *voltage_v)
         if (s_adc_calibrated) {
             sample_mv = esp_adc_cal_raw_to_voltage(raw, &s_adc_chars);
         }
-        accum_mv += sample_mv;
+        accum_mv += (double)sample_mv;
         samples++;
         esp_rom_delay_us(BATTERY_SAMPLE_US);
     }
@@ -179,7 +189,10 @@ static esp_err_t board_sample_battery(float *voltage_v)
         return ESP_FAIL;
     }
 
-    float average_mv = (float)accum_mv / (float)samples;
+    float average_mv = (float)(accum_mv / (double)samples);
+    if (adc_voltage_v) {
+        *adc_voltage_v = average_mv / 1000.0f;
+    }
     *voltage_v = (average_mv / 1000.0f) * BATTERY_DIVIDER;
     return ESP_OK;
 }
@@ -189,8 +202,11 @@ static esp_err_t board_sample_battery(float *voltage_v)
 static void board_refresh_locked(void)
 {
     float voltage = s_state.battery_voltage;
-    if (board_sample_battery(&voltage) == ESP_OK) {
+    float adc_voltage = s_state.battery_adc_voltage;
+    if (board_sample_battery(&voltage, &adc_voltage) == ESP_OK) {
         s_state.battery_voltage = voltage;
+        s_state.battery_adc_voltage = adc_voltage;
+        ESP_LOGD(TAG, "Battery ADC=%.3fV actual=%.3fV", adc_voltage, voltage);
     }
     s_state.charging = gpio_get_level(GPIO_CHRG_STATUS) == 0;
 }

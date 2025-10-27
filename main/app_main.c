@@ -14,6 +14,62 @@
 
 static const char *TAG = "APP";
 
+static void format_temperature(char *dst, size_t dst_len, float value)
+{
+    if (!dst || dst_len == 0) {
+        return;
+    }
+    if (isnan(value)) {
+        snprintf(dst, dst_len, "nan");
+    } else {
+        snprintf(dst, dst_len, "%.1fC", value);
+    }
+}
+
+static void format_voltage(char *dst, size_t dst_len, float value)
+{
+    if (!dst || dst_len == 0) {
+        return;
+    }
+    if (isnan(value)) {
+        snprintf(dst, dst_len, "nan");
+    } else {
+        snprintf(dst, dst_len, "%.2fV", value);
+    }
+}
+
+static void format_vector(char *dst, size_t dst_len, const float vec[3], const char *unit)
+{
+    if (!dst || dst_len == 0) {
+        return;
+    }
+    if (!vec || isnan(vec[0]) || isnan(vec[1]) || isnan(vec[2])) {
+        snprintf(dst, dst_len, "nan");
+        return;
+    }
+    if (unit) {
+        snprintf(dst, dst_len, "[%.2f %.2f %.2f]%s", vec[0], vec[1], vec[2], unit);
+    } else {
+        snprintf(dst, dst_len, "[%.2f %.2f %.2f]", vec[0], vec[1], vec[2]);
+    }
+}
+
+static void format_gravity_vector(char *dst, size_t dst_len, const float vec[3])
+{
+    if (!dst || dst_len == 0) {
+        return;
+    }
+    if (!vec || isnan(vec[0]) || isnan(vec[1]) || isnan(vec[2])) {
+        snprintf(dst, dst_len, "nan");
+        return;
+    }
+    const float inv_g = 1.0f / 9.80665f;
+    snprintf(dst, dst_len, "[%.2f %.2f %.2f]g",
+             vec[0] * inv_g,
+             vec[1] * inv_g,
+             vec[2] * inv_g);
+}
+
 static void log_snapshot(const char *label, bool verbose)
 {
     board_state_t board_state = {0};
@@ -67,13 +123,45 @@ static void log_snapshot(const char *label, bool verbose)
             ESP_LOGW(TAG, "%s BMP388 not present", label);
         }
     } else {
-        ESP_LOGI(TAG, "%s Sensors imu=%s mag=%s press=%s", label,
-                 sensor_state.imu_present ? "ok" : "missing",
-                 sensor_state.mag_present ? "ok" : "missing",
-                 sensor_state.press_present ? "ok" : "missing");
+        if (sensor_state.imu_present) {
+            char temp_buf[16];
+            char accel_buf[64];
+            char accel_g_buf[64];
+            char gyro_buf[64];
+            format_temperature(temp_buf, sizeof(temp_buf), sensor_state.imu_temperature_c);
+            format_vector(accel_buf, sizeof(accel_buf), sensor_state.imu_accel_mps2, "m/s^2");
+            format_gravity_vector(accel_g_buf, sizeof(accel_g_buf), sensor_state.imu_accel_mps2);
+            format_vector(gyro_buf, sizeof(gyro_buf), sensor_state.imu_gyro_dps, "dps");
+            ESP_LOGI(TAG, "%s IMU temp=%s accel=%s grav=%s gyro=%s", label, temp_buf, accel_buf, accel_g_buf, gyro_buf);
+        } else {
+            ESP_LOGW(TAG, "%s IMU not present", label);
+        }
+
+        if (sensor_state.mag_present) {
+            char temp_buf[16];
+            char mag_buf[64];
+            format_temperature(temp_buf, sizeof(temp_buf), sensor_state.mag_temperature_c);
+            format_vector(mag_buf, sizeof(mag_buf), sensor_state.mag_uT, "uT");
+            ESP_LOGI(TAG, "%s MAG temp=%s field=%s", label, temp_buf, mag_buf);
+        } else {
+            ESP_LOGW(TAG, "%s MAG not present", label);
+        }
+
+        if (sensor_state.press_present) {
+            char temp_buf[16];
+            format_temperature(temp_buf, sizeof(temp_buf), sensor_state.press_temperature_c);
+            ESP_LOGI(TAG, "%s PRESS temp=%s", label, temp_buf);
+        } else {
+            ESP_LOGW(TAG, "%s PRESS not present", label);
+        }
     }
 
-    ESP_LOGI(TAG, "%s Battery=%.2fV charging=%s encoder_pos=%ld", label, board_state.battery_voltage,
+    char batt_buf[16];
+    char adc_buf[16];
+    format_voltage(batt_buf, sizeof(batt_buf), board_state.battery_voltage);
+    format_voltage(adc_buf, sizeof(adc_buf), board_state.battery_adc_voltage);
+
+    ESP_LOGI(TAG, "%s Battery=%s (ADC=%s) charging=%s encoder_pos=%ld", label, batt_buf, adc_buf,
              board_state.charging ? "yes" : "no", (long)encoder_get_count());
 }
 
@@ -110,6 +198,8 @@ void app_main(void)
 
     if (lcd_spi_init() != ESP_OK) {
         ESP_LOGW(TAG, "LCD init failed");
+    } else if (lcd_spi_install_log_sink() != ESP_OK) {
+        ESP_LOGW(TAG, "LCD log sink install failed");
     }
 
     if (encoder_init() != ESP_OK) {
