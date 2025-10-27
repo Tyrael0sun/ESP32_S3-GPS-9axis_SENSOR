@@ -129,18 +129,27 @@ static esp_err_t i2c_device_write_byte(i2c_master_dev_handle_t dev, uint8_t reg_
 
 static bool detect_device(i2c_master_dev_handle_t dev, uint8_t who_am_i_reg, uint8_t expected_id)
 {
-	uint8_t id = 0;
-	esp_err_t err = i2c_device_read(dev, who_am_i_reg, &id, 1);
-	if (err != ESP_OK) {
-		ESP_LOGW(TAG, "WHO_AM_I read failed (reg=0x%02X err=%s)", who_am_i_reg, esp_err_to_name(err));
-		return false;
+	for (int attempt = 0; attempt < 3; ++attempt) {
+		uint8_t id = 0;
+		esp_err_t err = i2c_device_read(dev, who_am_i_reg, &id, 1);
+		ESP_LOGI(TAG, "WHO_AM_I attempt %d reg=0x%02X err=%s immediate=0x%02X", attempt + 1, who_am_i_reg, esp_err_to_name(err), id);
+		if (err == ESP_OK && id == expected_id) {
+			return true;
+		}
+		vTaskDelay(pdMS_TO_TICKS(2));
+		ESP_LOGI(TAG, "WHO_AM_I attempt %d reg=0x%02X post-delay=0x%02X", attempt + 1, who_am_i_reg, id);
+		if (err == ESP_OK && id == expected_id) {
+			ESP_LOGI(TAG, "WHO_AM_I ok (reg=0x%02X id=0x%02X attempt=%d)", who_am_i_reg, id, attempt + 1);
+			return true;
+		}
+		if (err != ESP_OK) {
+			ESP_LOGW(TAG, "WHO_AM_I read failed (reg=0x%02X err=%s attempt=%d)", who_am_i_reg, esp_err_to_name(err), attempt + 1);
+		} else {
+			ESP_LOGW(TAG, "WHO_AM_I mismatch (reg=0x%02X got=0x%02X expected=0x%02X attempt=%d)", who_am_i_reg, id, expected_id, attempt + 1);
+		}
+		vTaskDelay(pdMS_TO_TICKS(3));
 	}
-	if (id != expected_id) {
-		ESP_LOGW(TAG, "WHO_AM_I mismatch (reg=0x%02X got=0x%02X expected=0x%02X)", who_am_i_reg, id, expected_id);
-		return false;
-	}
-	ESP_LOGI(TAG, "WHO_AM_I ok (reg=0x%02X id=0x%02X)", who_am_i_reg, id);
-	return true;
+	return false;
 }
 
 static esp_err_t lsm6dsr_configure(void)
@@ -337,6 +346,7 @@ esp_err_t sensors_init(void)
 	if (!s_bus) {
 		return ESP_ERR_INVALID_STATE;
 	}
+	vTaskDelay(pdMS_TO_TICKS(10));
 
 	bool imu_present = false;
 	bool mag_present = false;

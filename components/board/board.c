@@ -245,9 +245,9 @@ esp_err_t board_i2c_init(void)
         .sda_io_num = BOARD_I2C_SDA_IO,
         .glitch_ignore_cnt = 7,
         .intr_priority = 0,
-        .trans_queue_depth = 8,
+        .trans_queue_depth = 0,
         .flags = {
-            .enable_internal_pullup = true,
+            .enable_internal_pullup = false,
         },
     };
 
