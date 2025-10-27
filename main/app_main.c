@@ -4,6 +4,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_err.h"
 
 #include "board.h"
 #include "sensors.h"
@@ -17,6 +18,11 @@ static void log_snapshot(const char *label, bool verbose)
 {
     board_state_t board_state = {0};
     board_read_state(&board_state);
+
+    esp_err_t update_err = sensors_update();
+    if (update_err != ESP_OK) {
+        ESP_LOGW(TAG, "%s sensor update failed (%s)", label, esp_err_to_name(update_err));
+    }
 
     sensor_snapshot_t sensor_state = {0};
     sensors_read_snapshot(&sensor_state);

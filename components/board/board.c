@@ -2,9 +2,10 @@
 
 #include <math.h>
 
-#include <driver/gpio.h>
 #include <esp_check.h>
 #include <esp_idf_version.h>
+#include <driver/gpio.h>
+#include <driver/i2c_master.h>
 #include <esp_log.h>
 #include <esp_rom_sys.h>
 #include <freertos/FreeRTOS.h>
@@ -38,6 +39,7 @@ static board_state_t s_state = {
     .battery_voltage = 0.0f,
     .charging = false,
 };
+static i2c_master_bus_handle_t s_i2c_bus;
 
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
 static adc_oneshot_unit_handle_t s_adc_unit;
@@ -87,14 +89,14 @@ static esp_err_t board_configure_adc(void)
 
     adc_oneshot_chan_cfg_t chan_cfg = {
         .bitwidth = ADC_BITWIDTH_DEFAULT,
-        .atten = ADC_ATTEN_DB_11,
+        .atten = ADC_ATTEN_DB_12,
     };
     ESP_RETURN_ON_ERROR(adc_oneshot_config_channel(s_adc_unit, BOARD_ADC_CHANNEL, &chan_cfg), TAG, "ADC chan config failed");
 
 #if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
     adc_cali_curve_fitting_config_t cali_cfg = {
         .unit_id = BOARD_ADC_UNIT,
-        .atten = ADC_ATTEN_DB_11,
+        .atten = ADC_ATTEN_DB_12,
         .bitwidth = ADC_BITWIDTH_DEFAULT,
     };
     if (adc_cali_create_scheme_curve_fitting(&cali_cfg, &s_adc_cali) == ESP_OK) {
@@ -103,7 +105,7 @@ static esp_err_t board_configure_adc(void)
 #elif ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
     adc_cali_line_fitting_config_t cali_cfg = {
         .unit_id = BOARD_ADC_UNIT,
-        .atten = ADC_ATTEN_DB_11,
+        .atten = ADC_ATTEN_DB_12,
         .bitwidth = ADC_BITWIDTH_DEFAULT,
     };
     if (adc_cali_create_scheme_line_fitting(&cali_cfg, &s_adc_cali) == ESP_OK) {
@@ -148,8 +150,8 @@ static esp_err_t board_sample_battery(float *voltage_v)
 
 static esp_err_t board_configure_adc(void)
 {
-    ESP_RETURN_ON_ERROR(adc2_config_channel_atten(BOARD_ADC_CHANNEL, ADC_ATTEN_DB_11), TAG, "ADC atten failed");
-    esp_adc_cal_value_t cal_type = esp_adc_cal_characterize(ADC_UNIT_2, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, 1100, &s_adc_chars);
+    ESP_RETURN_ON_ERROR(adc2_config_channel_atten(BOARD_ADC_CHANNEL, ADC_ATTEN_DB_12), TAG, "ADC atten failed");
+    esp_adc_cal_value_t cal_type = esp_adc_cal_characterize(ADC_UNIT_2, ADC_ATTEN_DB_12, ADC_WIDTH_BIT_12, 1100, &s_adc_chars);
     s_adc_calibrated = cal_type != ESP_ADC_CAL_VAL_NOT_SUPPORTED;
     return ESP_OK;
 }
@@ -228,4 +230,33 @@ void board_read_state(board_state_t *state)
     board_refresh_locked();
     *state = s_state;
     xSemaphoreGive(s_lock);
+}
+
+esp_err_t board_i2c_init(void)
+{
+    if (s_i2c_bus) {
+        return ESP_OK;
+    }
+
+    i2c_master_bus_config_t bus_config = {
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .i2c_port = BOARD_I2C_MASTER_NUM,
+        .scl_io_num = BOARD_I2C_SCL_IO,
+        .sda_io_num = BOARD_I2C_SDA_IO,
+        .glitch_ignore_cnt = 7,
+        .intr_priority = 0,
+        .trans_queue_depth = 8,
+        .flags = {
+            .enable_internal_pullup = true,
+        },
+    };
+
+    ESP_RETURN_ON_ERROR(i2c_new_master_bus(&bus_config, &s_i2c_bus), TAG, "I2C bus init failed");
+    ESP_LOGI(TAG, "I2C bus initialized successfully");
+    return ESP_OK;
+}
+
+i2c_master_bus_handle_t board_i2c_get_bus(void)
+{
+    return s_i2c_bus;
 }

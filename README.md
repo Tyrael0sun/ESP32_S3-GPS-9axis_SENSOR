@@ -18,7 +18,7 @@
 
 启动/日志行为
 - 调试日志通过 USB/UART0（GPIO43/44）输出，默认 INFO 级别。
-- 启动后前 10 秒内（每 5s）输出完整状态：
+- 启动后前 5 秒内（每 10s）输出完整状态：
   - GNSS 状态：工作模式、追踪卫星数、当前位置；若 GNSS 通信超时/模块不可达，打印 "GNSS not present"。
   - 传感器状态：LSM6DSR / LIS2MDL / BMP388 存在性与 IC 温度（若可读）；若 I2C 设备检测失败，打印 "XXX not present"。
   - 电池电压（V）与 CHRG_STATUS 电平。

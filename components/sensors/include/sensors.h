@@ -13,4 +13,5 @@ typedef struct {
 } sensor_snapshot_t;
 
 esp_err_t sensors_init(void);
+esp_err_t sensors_update(void);
 void sensors_read_snapshot(sensor_snapshot_t *snapshot);
