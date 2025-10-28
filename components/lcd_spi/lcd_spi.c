@@ -36,17 +36,17 @@
 #define LCD_LEDC_CHANNEL        LEDC_CHANNEL_0
 #define LCD_LEDC_SPEED_MODE     LEDC_LOW_SPEED_MODE
 #define LCD_LEDC_FREQUENCY_HZ   20000
-#define LCD_LEDC_DUTY_RES       LEDC_TIMER_13_BIT
+#define LCD_LEDC_DUTY_RES       LEDC_TIMER_10_BIT
 
 #define LCD_WIDTH               240
-#define LCD_HEIGHT              240
+#define LCD_HEIGHT              320
 
 #define LVGL_BUFFER_LINES       40
 #define LVGL_TICK_PERIOD_US     5000
-#define LVGL_TASK_DELAY_MS      10
+#define LVGL_TASK_DELAY_MS      10   // Minimum loop sleep to keep idle tasks running
 
 #define LOG_BUFFER_SIZE         4096
-#define BACKLIGHT_DEFAULT_PERCENT 80
+#define BACKLIGHT_DEFAULT_PERCENT 50
 
 static const char *TAG = "LCD";
 
@@ -54,6 +54,7 @@ static bool s_spi_bus_ready;
 static bool s_backlight_ready;
 static bool s_panel_ready;
 static bool s_lvgl_ready;
+static bool s_backlight_pending_on;
 
 static esp_lcd_panel_io_handle_t s_panel_io;
 static esp_lcd_panel_handle_t s_panel_handle;
@@ -187,8 +188,11 @@ static void lcd_lvgl_task(void *arg)
     (void)arg;
     while (true) {
         lcd_log_flush_to_lvgl();
-        lv_timer_handler();
-        vTaskDelay(pdMS_TO_TICKS(LVGL_TASK_DELAY_MS));
+        uint32_t wait_ms = lv_timer_handler();
+        if (wait_ms < LVGL_TASK_DELAY_MS) {
+            wait_ms = LVGL_TASK_DELAY_MS;
+        }
+        vTaskDelay(pdMS_TO_TICKS(wait_ms));
     }
 }
 
@@ -292,6 +296,7 @@ static esp_err_t lcd_spi_configure_panel(void)
     ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(s_panel_handle), TAG, "Panel reset failed");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_init(s_panel_handle), TAG, "Panel init failed");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_on_off(s_panel_handle, true), TAG, "Panel display on failed");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_mirror(s_panel_handle, true, true), TAG, "Panel mirror setup failed");
 
     s_panel_ready = true;
     return ESP_OK;
@@ -358,6 +363,7 @@ static esp_err_t lcd_lvgl_init(void)
         lcd_lvgl_free_buffers();
         return ESP_FAIL;
     }
+    lv_disp_set_rotation(s_lvgl_display, LV_DISP_ROT_180);
 
     s_log_textarea = lv_textarea_create(lv_scr_act());
     if (!s_log_textarea) {
@@ -385,7 +391,7 @@ static esp_err_t lcd_lvgl_init(void)
         return err;
     }
 
-    BaseType_t created = xTaskCreatePinnedToCore(lcd_lvgl_task, "lvgl", 4096, NULL, 5, &s_lvgl_task_handle, 0);
+    BaseType_t created = xTaskCreatePinnedToCore(lcd_lvgl_task, "lvgl", 4096, NULL, 5, &s_lvgl_task_handle, 1);
     if (created != pdPASS) {
         esp_timer_stop(s_lvgl_tick_timer);
         esp_timer_delete(s_lvgl_tick_timer);
@@ -507,6 +513,14 @@ static esp_err_t lcd_spi_configure_panel(void)
     ESP_RETURN_ON_ERROR(lcd_spi_configure_bus(), TAG, "Bus setup failed");
 
     if (!s_panel_io) {
+
+    if (s_backlight_pending_on && s_backlight_ready) {
+        if (lcd_spi_set_backlight_percent(BACKLIGHT_DEFAULT_PERCENT) == ESP_OK) {
+            s_backlight_pending_on = false;
+        } else {
+            ESP_LOGW(TAG, "Backlight enable deferred due to error");
+        }
+    }
         esp_lcd_panel_io_spi_config_t io_config = {
             .dc_gpio_num = LCD_PIN_DC,
             .cs_gpio_num = LCD_PIN_CS,
@@ -565,10 +579,10 @@ static esp_err_t lcd_spi_configure_backlight(void)
     ESP_RETURN_ON_ERROR(ledc_channel_config(&ch_cfg), TAG, "LEDC channel config failed");
 
     s_backlight_ready = true;
-    return lcd_spi_set_backlight_percent(80);
+    return lcd_spi_set_backlight_percent(50);
 }
 
-static void lcd_lvgl_flush(lv_disp_drv_t *disp_drv, const lv_area_t *area, lv_color_t *color_map)
+    return lcd_spi_set_backlight_percent(0);
 {
     if (!s_panel_handle || !area || !color_map) {
         lv_disp_flush_ready(disp_drv);
@@ -679,6 +693,7 @@ esp_err_t lcd_spi_init(void)
     ESP_RETURN_ON_ERROR(lcd_spi_configure_backlight(), TAG, "Backlight setup failed");
     ESP_RETURN_ON_ERROR(lcd_spi_configure_panel(), TAG, "Panel setup failed");
     ESP_RETURN_ON_ERROR(lcd_lvgl_init(), TAG, "LVGL init failed");
+    s_backlight_pending_on = true;
     ESP_LOGI(TAG, "SPI LCD ready (ST7789 + LVGL)");
     return ESP_OK;
 }
@@ -764,10 +779,10 @@ esp_err_t lcd_spi_create_panel_io(const esp_lcd_panel_io_spi_config_t *io_config
 #define LCD_LEDC_CHANNEL        LEDC_CHANNEL_0
 #define LCD_LEDC_SPEED_MODE     LEDC_LOW_SPEED_MODE
 #define LCD_LEDC_FREQUENCY_HZ   20000
-#define LCD_LEDC_DUTY_RES       LEDC_TIMER_13_BIT
+#define LCD_LEDC_DUTY_RES       LEDC_TIMER_10_BIT
 
 #define LCD_WIDTH               240
-#define LCD_HEIGHT              240
+#define LCD_HEIGHT              320
 #define FONT_WIDTH              6
 #define FONT_HEIGHT             8
 #define TEXT_COLUMNS            (LCD_WIDTH / FONT_WIDTH)
@@ -1139,7 +1154,7 @@ static esp_err_t lcd_spi_configure_backlight(void)
     ESP_RETURN_ON_ERROR(ledc_channel_config(&ch_cfg), TAG, "LEDC channel config failed");
 
     s_backlight_ready = true;
-    return lcd_spi_set_backlight_percent(80);
+    return lcd_spi_set_backlight_percent(50);
 }
 
 static int lcd_spi_log_vprintf(const char *fmt, va_list args)
@@ -1263,7 +1278,7 @@ esp_err_t lcd_spi_create_panel_io(const esp_lcd_panel_io_spi_config_t *io_config
 #define LCD_LEDC_CHANNEL        LEDC_CHANNEL_0
 #define LCD_LEDC_SPEED_MODE     LEDC_LOW_SPEED_MODE
 #define LCD_LEDC_FREQUENCY_HZ   20000
-#define LCD_LEDC_DUTY_RES       LEDC_TIMER_13_BIT
+#define LCD_LEDC_DUTY_RES       LEDC_TIMER_10_BIT
 
 static const char *TAG = "LCD";
 
@@ -1346,7 +1361,7 @@ static esp_err_t lcd_spi_configure_backlight(void)
     ESP_RETURN_ON_ERROR(ledc_channel_config(&ch_cfg), TAG, "LEDC channel config failed");
 
     s_backlight_ready = true;
-    return lcd_spi_set_backlight_percent(80);
+    return lcd_spi_set_backlight_percent(50);
 }
 
 esp_err_t lcd_spi_init(void)

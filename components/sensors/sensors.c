@@ -48,6 +48,8 @@
 #define BMP388_OSR_REG              0x1C
 #define BMP388_TEMP_DATA_XLSB       0x22
 #define BMP388_CALIB_T1_LSB         0x31
+#define BMP388_CMD_REG              0x7E
+#define BMP388_CMD_SOFTRESET        0xB6
 #define BMP388_PWR_TEMP_EN          (1 << 4)
 #define BMP388_PWR_PRESS_EN         (1 << 3)
 #define BMP388_PWR_MODE_NORMAL      0x03
@@ -173,6 +175,81 @@ static bool detect_device(i2c_master_dev_handle_t dev, uint8_t who_am_i_reg, uin
 		vTaskDelay(pdMS_TO_TICKS(3));
 	}
 	return false;
+}
+
+static void sensors_issue_general_reset(void)
+{
+	if (!s_bus) {
+		return;
+	}
+
+	i2c_device_config_t gc_cfg = {
+		.dev_addr_length = I2C_ADDR_BIT_LEN_7,
+		.device_address = 0x00,
+		.scl_speed_hz = BOARD_I2C_FREQ_HZ,
+		.scl_wait_us = 0,
+		.flags = {
+			.disable_ack_check = true,
+		},
+	};
+
+	i2c_master_dev_handle_t gc_dev = NULL;
+	esp_err_t add_err = i2c_master_bus_add_device(s_bus, &gc_cfg, &gc_dev);
+	if (add_err != ESP_OK) {
+		ESP_LOGW(TAG, "General call device add failed (%s)", esp_err_to_name(add_err));
+		return;
+	}
+
+	uint8_t reset_cmd = 0x06; // I2C general call reset
+	esp_err_t tx_err = i2c_master_transmit(gc_dev, &reset_cmd, 1, I2C_MASTER_TIMEOUT_MS);
+	if (tx_err != ESP_OK) {
+		ESP_LOGW(TAG, "General call reset failed (%s)", esp_err_to_name(tx_err));
+	} else {
+		ESP_LOGI(TAG, "General call reset issued");
+	}
+
+	i2c_master_bus_rm_device(gc_dev);
+	vTaskDelay(pdMS_TO_TICKS(2));
+}
+
+static void lsm6dsr_soft_reset(void)
+{
+	if (!s_lsm6dsr_dev) {
+		return;
+	}
+	esp_err_t err = i2c_device_write_byte(s_lsm6dsr_dev, LSM6DSR_CTRL3_C, 0x01);
+	if (err != ESP_OK) {
+		ESP_LOGW(TAG, "LSM6DSR soft reset failed (%s)", esp_err_to_name(err));
+		return;
+	}
+	vTaskDelay(pdMS_TO_TICKS(10));
+}
+
+static void lis2mdl_soft_reset(void)
+{
+	if (!s_lis2mdl_dev) {
+		return;
+	}
+	esp_err_t err = i2c_device_write_byte(s_lis2mdl_dev, LIS2MDL_CFG_REG_A, 0x04);
+	if (err != ESP_OK) {
+		ESP_LOGW(TAG, "LIS2MDL soft reset failed (%s)", esp_err_to_name(err));
+		return;
+	}
+	vTaskDelay(pdMS_TO_TICKS(10));
+}
+
+static void bmp388_soft_reset(void)
+{
+	if (!s_bmp388_dev) {
+		return;
+	}
+	esp_err_t err = i2c_device_write_byte(s_bmp388_dev, BMP388_CMD_REG, BMP388_CMD_SOFTRESET);
+	if (err != ESP_OK) {
+		ESP_LOGW(TAG, "BMP388 soft reset failed (%s)", esp_err_to_name(err));
+		return;
+	}
+	s_bmp_calib.loaded = false;
+	vTaskDelay(pdMS_TO_TICKS(5));
 }
 
 static esp_err_t lsm6dsr_configure(void)
@@ -499,12 +576,14 @@ esp_err_t sensors_init(void)
 		return ESP_ERR_INVALID_STATE;
 	}
 	vTaskDelay(pdMS_TO_TICKS(10));
+	sensors_issue_general_reset();
 
 	bool imu_present = false;
 	bool mag_present = false;
 	bool press_present = false;
 
 	if (add_device(&s_lsm6dsr_cfg, &s_lsm6dsr_dev) == ESP_OK) {
+		lsm6dsr_soft_reset();
 		if (detect_device(s_lsm6dsr_dev, LSM6DSR_WHO_AM_I_REG, LSM6DSR_ID_PRIMARY) && lsm6dsr_configure() == ESP_OK) {
 			imu_present = true;
 		} else {
@@ -513,6 +592,7 @@ esp_err_t sensors_init(void)
 	}
 
 	if (add_device(&s_lis2mdl_cfg, &s_lis2mdl_dev) == ESP_OK) {
+		lis2mdl_soft_reset();
 		if (detect_device(s_lis2mdl_dev, LIS2MDL_WHO_AM_I_REG, LIS2MDL_ID) && lis2mdl_configure() == ESP_OK) {
 			mag_present = true;
 		} else {
@@ -521,6 +601,7 @@ esp_err_t sensors_init(void)
 	}
 
 	if (add_device(&s_bmp388_cfg, &s_bmp388_dev) == ESP_OK) {
+		bmp388_soft_reset();
 		if (detect_device(s_bmp388_dev, BMP388_CHIP_ID_REG, BMP388_CHIP_ID) && bmp388_configure() == ESP_OK) {
 			press_present = true;
 		} else {
