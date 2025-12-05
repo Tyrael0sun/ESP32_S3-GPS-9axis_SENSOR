@@ -19,7 +19,7 @@
 * SoC：ESP32-S3FH4R2
 
   * 4 MB Flash
-  * 2 MB PSRAM
+  * 2 MB QUAD SPI PSRAM
 * GNSS：u-blox NEO-M8N（UART1）
 * IMU：LSM6DSR（I2C，6 轴）
 * 磁力计：LIS2MDL（I2C）
