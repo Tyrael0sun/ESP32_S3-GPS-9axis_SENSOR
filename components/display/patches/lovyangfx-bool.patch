@@ -1,0 +1,11 @@
+diff --git a/src/lgfx/utility/lgfx_qrcode.h b/src/lgfx/utility/lgfx_qrcode.h
+index 8ba4e10a..d6a9c5dd 100644
+--- a/src/lgfx/utility/lgfx_qrcode.h
++++ b/src/lgfx/utility/lgfx_qrcode.h
+@@
+-typedef unsigned char bool;
+-static const bool false = 0;
+-static const bool true = 1;
++#ifndef __cplusplus
++#include <stdbool.h>
++#endif
