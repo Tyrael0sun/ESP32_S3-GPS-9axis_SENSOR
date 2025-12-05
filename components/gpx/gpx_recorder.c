@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
+#include "driver/sdmmc_host.h"
 #include "log_system.h"
 #include "rtc_manager.h"
 #include "freertos/FreeRTOS.h"

@@ -24,6 +24,9 @@ static void mahony_update(app_data_model_t *m,
                           const float acc[3],
                           const float gyro_dps[3],
                           const float mag_uT[3]);
+static void try_calibrate_baro_p0(app_data_model_t *m);
+static void update_baro_altitude(app_data_model_t *m);
+static float compute_baro_altitude(float pressure, float p0);
 
 static void sensor_task(void *arg)
 {
@@ -47,9 +50,6 @@ static void sensor_task(void *arg)
     TickType_t last_wake = xTaskGetTickCount();
 
     while (1) {
-    static void try_calibrate_baro_p0(app_data_model_t *m);
-    static void update_baro_altitude(app_data_model_t *m);
-    static float compute_baro_altitude(float pressure, float p0);
         if (imu_lsm6dsr_read_raw(&ax, &ay, &az, &gx, &gy, &gz, &imu_temp) == ESP_OK) {
             model->sensor.ax = ax;
             model->sensor.ay = ay;
@@ -235,7 +235,7 @@ static void mahony_update(app_data_model_t *m,
     q2 += (q0 * gy - q1 * gz + q3 * gx) * (0.5f * dt);
     q3 += (q0 * gz + q1 * gy - q2 * gx) * (0.5f * dt);
 
-    norm = sqrtf(q0 * q0 + q1 * q1 + q2 * q2 + q3 * q3);
+    float norm = sqrtf(q0 * q0 + q1 * q1 + q2 * q2 + q3 * q3);
     q0 /= norm;
     q1 /= norm;
     q2 /= norm;

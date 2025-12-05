@@ -4,6 +4,7 @@
 #pragma once
 
 #include <time.h>
+#include <stdbool.h>
 
 void rtc_manager_init(void);
 void rtc_manager_set_utc(time_t utc_ts, bool synced);

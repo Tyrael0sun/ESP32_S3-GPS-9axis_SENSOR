@@ -6,6 +6,8 @@
 #include "macro_def.h"
 #include "app_check.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <string.h>
 
 #define LSM6DSR_REG_WHO_AM_I      0x0F
@@ -50,9 +52,12 @@ esp_err_t imu_lsm6dsr_init(void)
 
     uint8_t who = 0;
     CHECK_ESP_RETURN(imu_read_regs(LSM6DSR_REG_WHO_AM_I, &who, 1));
-    if (who != 0x6C) {
+    if (who != 0x6C && who != 0x6B) {
         ESP_LOGE(TAG, "invalid who_am_i = 0x%02X", who);
         return ESP_FAIL;
+    }
+    if (who == 0x6B) {
+        ESP_LOGW(TAG, "detected compatible variant (who_am_i=0x6B)");
     }
 
     // 复位设备

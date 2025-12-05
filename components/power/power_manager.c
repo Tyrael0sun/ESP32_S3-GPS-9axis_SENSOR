@@ -6,7 +6,7 @@
 #include "macro_def.h"
 #include "app_check.h"
 #include "esp_log.h"
-#include "driver/adc.h"
+#include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "driver/gpio.h"
@@ -34,7 +34,7 @@ static esp_err_t adc_setup(void)
 
     adc_oneshot_chan_cfg_t chan_cfg = {
         .bitwidth = ADC_BITWIDTH_12,
-        .atten = ADC_ATTEN_DB_11,
+        .atten = ADC_ATTEN_DB_12,
     };
     CHECK_ESP_RETURN(adc_oneshot_config_channel(s_adc_unit,
                                                 s_adc_channel,
@@ -42,7 +42,7 @@ static esp_err_t adc_setup(void)
 
     adc_cali_curve_fitting_config_t cali_cfg = {
         .unit_id = ADC_UNIT_2,
-        .atten = ADC_ATTEN_DB_11,
+        .atten = ADC_ATTEN_DB_12,
         .bitwidth = ADC_BITWIDTH_12,
     };
     if (adc_cali_create_scheme_curve_fitting(&cali_cfg, &s_adc_cali) != ESP_OK) {

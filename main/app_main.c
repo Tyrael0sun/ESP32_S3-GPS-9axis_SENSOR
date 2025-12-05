@@ -5,6 +5,7 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "esp_log.h"
+#include "esp_err.h"
 
 #include "rtc_manager.h"
 #include "data_model.h"
@@ -17,11 +18,14 @@
 #include "bike_manager.h"
 #include "pgear_manager.h"
 #include "ui_manager.h"
+#include "display_driver.h"
 
 static const char *TAG = "app";
 
 static TaskHandle_t s_sys_task;
 static bool s_pgear_fast_rate = false;
+static QueueHandle_t s_input_queue = NULL;
+static bool s_ui_ready = false;
 
 #define MAIN_MENU_ITEMS 4
 #define SETTINGS_OPTION_COUNT 3
@@ -36,6 +40,14 @@ static void handle_settings_input(const input_event_t *evt);
 static void cycle_auto_pause(auto_ctrl_config_t *cfg);
 static uint8_t menu_index_for_mode(system_mode_t mode);
 static void update_pgear_rate(bool enable);
+static void log_start_result(const char *name, esp_err_t err);
+
+static void log_start_result(const char *name, esp_err_t err)
+{
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "%s failed: %s", name, esp_err_to_name(err));
+    }
+}
 
 static void update_pgear_rate(bool enable)
 {
@@ -270,15 +282,18 @@ static void handle_settings_input(const input_event_t *evt)
 
 static void sys_task(void *arg)
 {
-    QueueHandle_t input_q = input_event_queue_get();
     input_event_t evt;
 
     while (1) {
-        if (xQueueReceive(input_q, &evt, pdMS_TO_TICKS(50)) == pdTRUE) {
+        if (s_input_queue &&
+            xQueueReceive(s_input_queue, &evt, pdMS_TO_TICKS(50)) == pdTRUE) {
             handle_input_event(&evt);
         }
 
-        ui_manager_update();
+        if (s_ui_ready) {
+            ui_manager_update();
+        }
+
         rtc_manager_poll();
         vTaskDelay(pdMS_TO_TICKS(50));
     }
@@ -289,16 +304,47 @@ void app_main(void)
     data_model_init();
     rtc_manager_init();
 
-    ESP_ERROR_CHECK(log_system_start());
-    ESP_ERROR_CHECK(heartbeat_task_start());
-    ESP_ERROR_CHECK(sensor_manager_start());
-    ESP_ERROR_CHECK(gnss_driver_init());
-    ESP_ERROR_CHECK(input_driver_start());
-    ESP_ERROR_CHECK(power_manager_start());
-    ESP_ERROR_CHECK(gpx_recorder_start());
-    ESP_ERROR_CHECK(bike_manager_start());
-    ESP_ERROR_CHECK(pgear_manager_start());
-    ESP_ERROR_CHECK(ui_manager_init());
+    esp_err_t err;
+
+    err = log_system_start();
+    log_start_result("log system", err);
+
+    err = heartbeat_task_start();
+    log_start_result("heartbeat task", err);
+
+    err = sensor_manager_start();
+    log_start_result("sensor manager", err);
+
+    err = gnss_driver_init();
+    log_start_result("gnss driver", err);
+
+    err = input_driver_start();
+    log_start_result("input driver", err);
+    if (err == ESP_OK) {
+        s_input_queue = input_event_queue_get();
+        if (s_input_queue == NULL) {
+            ESP_LOGE(TAG, "input queue unavailable, events disabled");
+        }
+    }
+
+    err = power_manager_start();
+    log_start_result("power manager", err);
+
+    err = gpx_recorder_start();
+    log_start_result("gpx recorder", err);
+
+    err = bike_manager_start();
+    log_start_result("bike manager", err);
+
+    err = pgear_manager_start();
+    log_start_result("pgear manager", err);
+
+    err = display_driver_init();
+    log_start_result("display driver", err);
+
+    err = ui_manager_init();
+    log_start_result("ui manager", err);
+    s_ui_ready = (err == ESP_OK);
 
     BaseType_t ret = xTaskCreatePinnedToCore(sys_task,
                                              "sys_task",

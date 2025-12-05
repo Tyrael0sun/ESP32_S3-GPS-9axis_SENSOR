@@ -5,6 +5,7 @@
 #include "ui_views.h"
 #include "data_model.h"
 #include "esp_log.h"
+#include "lvgl.h"
 
 static const char *TAG = "ui";
 
@@ -14,9 +15,13 @@ static lv_obj_t *s_page_gpx;
 static lv_obj_t *s_page_pgear;
 static lv_obj_t *s_page_settings;
 
-static void create_pages(void)
+static esp_err_t create_pages(void)
 {
     lv_obj_t *scr = lv_scr_act();
+    if (scr == NULL) {
+        ESP_LOGE(TAG, "lvgl active screen unavailable");
+        return ESP_ERR_INVALID_STATE;
+    }
 
     s_page_main_menu = lv_obj_create(scr);
     lv_obj_set_size(s_page_main_menu, LV_PCT(100), LV_PCT(100));
@@ -37,11 +42,32 @@ static void create_pages(void)
     s_page_settings = lv_obj_create(scr);
     lv_obj_set_size(s_page_settings, LV_PCT(100), LV_PCT(100));
     ui_settings_page_create(s_page_settings);
+
+    return ESP_OK;
 }
 
 esp_err_t ui_manager_init(void)
 {
-    create_pages();
+    if (s_page_main_menu != NULL) {
+        ESP_LOGW(TAG, "ui already initialized");
+        return ESP_OK;
+    }
+
+    if (!lv_is_initialized()) {
+        ESP_LOGE(TAG, "lvgl not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (lv_display_get_default() == NULL) {
+        ESP_LOGE(TAG, "lvgl display not registered");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t err = create_pages();
+    if (err != ESP_OK) {
+        return err;
+    }
+
     ESP_LOGI(TAG, "ui manager init done");
     return ESP_OK;
 }
@@ -85,4 +111,6 @@ void ui_manager_update(void)
         show_page(s_page_main_menu);
         break;
     }
+
+    lv_timer_handler();
 }
