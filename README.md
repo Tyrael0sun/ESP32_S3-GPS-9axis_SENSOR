@@ -1,48 +1,73 @@
 # ESP32S3 三合一设备
 
-## 软件需求规格书（SRS）v1.4
+## 软件需求规格书（SRS）v1.5
 
 ---
 
 ## 0. 概述
 
-* **设备功能集：**
+### 0.1 功能概述
 
-  1. 自行车码表（Bike Computer）
-  2. GPS 轨迹记录仪（GPX Recorder）
-  3. P-GEAR 汽车 0–100 加速测试
+设备提供三大核心功能：
 
-* **硬件平台：**
+1. **自行车码表（Bike Computer）**
+2. **GPS 轨迹记录仪（GPX Recorder）**
+3. **P-GEAR 汽车 0–100 加速测试**
 
-  * SoC：ESP32-S3FH4R2（4MB Flash，2MB PSRAM）
-  * GNSS：u-blox NEO-M8N（UART1）
-  * IMU：LSM6DSR（I2C，6 轴）
-  * 磁力计：LIS2MDL（I2C）
-  * 气压计：BMP388（I2C）
-  * 显示：ST7789 240×320 竖屏（旋转 180°）
-  * 存储：SD 卡，4-bit SDIO（SDMMC + DMA）
-  * 输入：旋转编码器 + 单按键
-  * 电源相关：电池 ADC，充电状态引脚
+### 0.2 硬件平台
 
-* **软件环境：**
+* SoC：ESP32-S3FH4R2
 
-  * ESP-IDF v6.1（I2C 使用 **v6.0+ 新驱动 API**）
-  * FreeRTOS
-  * LVGL（UI 框架）
-  * LovyanGFX（LCD 驱动）
+  * 4 MB Flash
+  * 2 MB PSRAM
+* GNSS：u-blox NEO-M8N（UART1）
+* IMU：LSM6DSR（I2C，6 轴）
+* 磁力计：LIS2MDL（I2C）
+* 气压计：BMP388（I2C）
+* 显示：ST7789 240×320 竖屏，软件旋转 180°
+* 存储：SD 卡，4-bit SDIO（SDMMC + DMA）
+* 输入：旋转编码器 + 单按键
+* 电源：电池电压 ADC，充电状态引脚
 
-* **风格与本地化要求：**
+### 0.3 软件环境
 
-  * 代码语言：C 为主，可封装少量 C++
-  * **注释必须使用中文**，源码统一 UTF-8 编码
-  * 标识符统一英文，`lower_snake_case` 命名
-  * UI 文本：本版本仅支持中文，不做多语言切换
-  * 模块分层清晰，接口规范，便于 AI 生成和维护
+* ESP-IDF v6.1
 
-* **当前版本限制：**
+  * **I2C 必须使用 v6 新驱动 `driver/i2c_master.h`**
+* FreeRTOS
+* LVGL（UI 框架）
+* LovyanGFX（LCD 驱动）
 
-  * 不启用 WiFi 功能（避免 ADC2/BAT_ADC 与 WiFi 冲突）
-  * 不实现 OTA / SD 卡升级，仅支持串口刷写固件
+### 0.4 架构与模块
+
+* FreeRTOS 多任务 + 双核调度（core0/core1 区分）
+* 数据中心模块：**DataModel / context_manager（`app_data_model_t` 单例）**
+* 错误处理宏模块：`app_check.h` / `macro_def.h`（统一 CHECK_ERR 系列宏）
+* 功能模块：
+
+  * GNSS 模块
+  * 传感器 + Mahony 姿态解算模块
+  * GPX 记录模块
+  * BIKE 码表逻辑模块
+  * P-GEAR 状态机模块
+  * UI 模块（各页面）
+  * 输入模块（按键 + 旋钮）
+  * 日志/心跳/存储模块
+  * 电源管理模块
+
+### 0.5 风格与本地化要求
+
+* 代码语言：C 为主，可封装少量 C++
+* **所有注释必须使用中文**
+* 源码编码统一 UTF-8
+* 标识符统一英文，`lower_snake_case` 命名
+* UI 文本：本版本仅支持中文，不做多语言切换
+* 模块分层清晰，接口规范，便于 AI 生成和维护
+
+### 0.6 当前版本限制
+
+* 不启用 WiFi 功能（避免 ADC2/BAT_ADC 与 WiFi 冲突）
+* 不实现 OTA / SD 卡升级，仅支持串口刷写固件
 
 ---
 
@@ -71,40 +96,45 @@
 | 旋转编码器       | ENC_A / ENC_B     | 1/3   | 上拉输入，正交编码器               |
 | 主按键         | KEY_MAIN          | 2     | 上拉输入                     |
 | 电池检测        | BAT_ADC           | 12    | 1:1 分压输入，ADC2 通道         |
-| 充电状态        | CHRG_STATUS       | 21    | 输入，引脚逻辑由硬件定义（后文约定）       |
+| 充电状态        | CHRG_STATUS       | 21    | 输入，引脚逻辑由硬件定义（软件中说明语义）    |
 
 > 说明：
 >
-> * 软件中禁用 WiFi，避免 ADC2 资源与 WiFi 抢占。
-> * BAT_ADC 为 1:1 分压，硬件必须保证 ADC 输入电压不超过推荐上限，软件中需注明 ADC 衰减模式与量程关系。
-> * GPIO3 为 strapping 管脚，硬件应保证上电默认电平满足启动要求，上电后可作为普通输入使用。
-> * 硬件无 SD 卡插拔检测，本项目视为**不支持热插拔**：记录过程中用户拔卡为异常行为。
+> * 禁用 WiFi，避免 ADC2 与 WiFi 抢占。
+> * BAT_ADC 为 1:1 分压，硬件保证电压不过上限，软件需注明 ADC 衰减模式。
+> * GPIO3 为 strapping 管脚，上电电平满足启动要求，上电后可做普通输入。
+> * 无 SD 卡插拔检测，本项目视为 **不支持热插拔**，记录过程中拔卡视为错误行为。
 
 ### 1.2 显示屏
 
 * 控制器：ST7789
 * 分辨率：240×320
-* 方向：竖屏（物理），软件设置旋转 180°
-* 接口：SPI3，配合 LovyanGFX；背光 PWM（GPIO9，2 kHz，默认 50% 占空比）
-* 建议：
-
-  * 使用 RGB565（16bit）色深
-  * 刷新使用 SPI DMA（GDMA）
+* 方向：物理竖屏，软件设置旋转 180°
+* 接口：SPI3 + LovyanGFX
+* 背光：GPIO9，PWM 频率 2 kHz，默认占空比 50%
+* 色深：RGB565（16 bits）
+* 要求使用 SPI DMA（GDMA）进行刷屏
 
 ### 1.3 I2C 使用要求（ESP-IDF v6 新接口）
 
-* 必须使用 ESP-IDF v6.0+ 的新 I2C 主机接口 `driver/i2c_master.h`，**禁止**使用旧版 `driver/i2c.h`。
-* 初始化流程：
+* 必须使用 ESP-IDF v6.0+ 的新 I2C 主机接口 `driver/i2c_master.h`。
+* **严禁**使用旧版 `driver/i2c.h`，禁止出现以下旧 API：
 
-  * 使用 `i2c_new_master_bus()` 创建 `i2c_master_bus_handle_t bus`。
-  * 对 IMU/MAG/BARO 调用 `i2c_master_bus_add_device()` 创建 `i2c_master_dev_handle_t`。
-* 访存接口：
+  * `i2c_cmd_link_create` / `i2c_cmd_link_delete`
+  * `i2c_master_start` / `i2c_master_stop`
+  * `i2c_master_write_byte` / `i2c_master_write` / `i2c_master_read`
+  * `i2c_master_read_byte` / `i2c_master_cmd_begin` 等
+* 初始化流程示例：
 
-  * 写寄存器：`i2c_master_transmit()`
-  * 读寄存器：`i2c_master_receive()`
+  * 使用 `i2c_new_master_bus()` 创建 `i2c_master_bus_handle_t`；
+  * 使用 `i2c_master_bus_add_device()` 为 IMU/MAG/BARO 创建 `i2c_master_dev_handle_t`。
+* 访问接口：
+
+  * 写：`i2c_master_transmit()`
+  * 读：`i2c_master_receive()`
   * 写后读：`i2c_master_transmit_receive()`
   * 探测设备：`i2c_master_probe()`
-* 新旧 API 不得混用；I2C 相关源文件仅允许包含 `i2c_master.h` / `i2c_types.h`，不允许包含 `i2c.h`。
+* 新旧 API 禁止混用；I2C 模块只允许包含 `i2c_master.h` / `i2c_types.h`。
 
 ---
 
@@ -119,105 +149,108 @@
 | 短按（CLICK）  | `< 300 ms`      | 菜单选择 / 一般确认 / 子菜单        |
 | 双击（DOUBLE） | 400 ms 窗口内两次短按  | BIKE：打圈；GPX：打点；P-GEAR：重测 |
 | 中按（MID）    | 700–1300 ms     | 预留扩展功能                   |
-| 长按（LONG）   | ≥ 1.5 s 且 < 8 s | 功能模式内进入设置                |
-| 超长按（ULTRA） | ≥ 8 s           | 预留，不在本版本中定义具体动作          |
+| 长按（LONG）   | ≥ 1.5 s 且 < 8 s | 在模式页面中进入设置               |
+| 超长按（ULTRA） | ≥ 8 s           | 预留系统级功能，本版本不绑定具体动作       |
 
 **消抖与优先级：**
 
 * 实现 ≥ 100 ms 按键消抖。
-* 双击识别窗口：从第一次短按释放开始计 400 ms；
+* 双击识别窗口：
 
-  * 在窗口结束前不要立即发 CLICK，需等确认是否发生第二次短按；
-* 长按 / 超长按优先级：
+  * 从第一次短按释放开始计时 400 ms；
+  * 在窗口结束前，需等待确认是否出现第二次短按：
 
-  * 当按下时间超过 LONG 阈值时：不再识别 CLICK/DOUBLE，仅产生 LONG 或 ULTRA；
-  * 时间窗口重叠时，优先级：`ULTRA > LONG > DOUBLE > MID > CLICK`。
+    * 如果出现第二次短按：触发 DOUBLE；
+    * 若未出现，则认为是单次 CLICK。
+* 长按 / 超长按对双击的抑制：
 
-**日志要求：**
-
-* 每次按键事件触发时，必须立刻通过 UART0 输出事件日志（格式见第 11 章）。
-
-### 2.2 旋转编码器
-
-* ENC_A/ENC_B 使用 GPIO 中断，正交编码。
-* **4 倍细分**：
-
-  * 以 A/B 两路所有有效边沿为“脉冲”，综合方向信息，每累计 4 个边沿视为 1 步；
-* 方向判定：
-
-  * 例如：A 相超前 B 为顺时针（ENC_RIGHT），反之为逆时针（ENC_LEFT），具体方向在代码注释中固定说明。
-* 去抖和超时：
-
-  * 建议在中断中仅增减原始脉冲计数，在一个周期任务中（1–5 ms）统计步数；
-  * 若两步之间时间间隔 ≥ 1000 ms，则清零“未凑满一整步的残余脉冲数”，已经发出的步事件不受影响；
-  * 这样既能过滤极慢干扰，又不会影响慢速、精确调节。
+  * 当按下时间超过 LONG 阈值后，不再识别 CLICK/DOUBLE；
+  * 优先级：`ULTRA > LONG > DOUBLE > MID > CLICK`。
 
 **事件日志：**
 
-* 每次产生一个 ENC_LEFT / ENC_RIGHT 步事件时输出 `[EVT]` 日志。
+* 每次按键事件产生时，必须立即输出一条 UART0 事件日志（格式见第 11 章）。
 
-### 2.3 各模式下输入行为
+### 2.2 旋转编码器
 
-#### 2.3.1 主菜单（MAIN_MENU）
+* ENC_A / ENC_B 为正交编码器，接 GPIO 中断，内部上拉。
+* **4 倍细分**：
+
+  * 将 A/B 两路所有有效边沿综合，用于判断方向；
+  * 每累计 4 个边沿记为 1 步，产生 ENC_LEFT 或 ENC_RIGHT 事件。
+* 方向定义：
+
+  * 例如：A 相领先 B 相为顺时针（ENC_RIGHT），反之为 ENCL_LEFT；
+  * 具体方向在实现中通过注释固定说明。
+* 去抖和超时：
+
+  * 在中断中只累积脉冲计数；
+  * 在一个 1–5 ms 周期的任务中统计步数；
+  * 若两步之间时间间隔 ≥ 1000 ms，则清零“残余脉冲”，已发出的步事件不受影响；
+  * 这样既过滤极慢干扰，又不影响慢速精调。
+
+**事件日志：**
+
+* 每产生一个步事件（ENC_LEFT/RIGHT）时，输出一行 [EVT] 日志。
+
+### 2.3 主菜单（MAIN_MENU）交互
 
 * 旋钮：
 
-  * ENC_LEFT / ENC_RIGHT：在菜单项之间上下移动高亮光标。
+  * ENC_LEFT / ENC_RIGHT：菜单项上下移动光标。
 * 主按键：
 
-  * CLICK：进入当前高亮菜单项（Bike / GPX / P-GEAR / 设置）。
-  * DOUBLE/MID/LONG/ULTRA：当前版本保留，不绑定行为。
+  * CLICK：进入当前高亮项目（Bike / GPX / P-GEAR / 设置）。
+  * DOUBLE/MID/LONG/ULTRA：在主菜单中不绑定动作。
 
-> 进入“设置”仅允许通过“选中设置 + CLICK”，主菜单中 LONG 不进入设置，避免与模式页逻辑混淆。
-
-#### 2.3.2 MODE_BIKE（自行车码表）
+### 2.4 MODE_BIKE 模式交互
 
 * 旋钮：
 
-  * 在 BIKE 数据页之间切换（如主数据页 / 扩展数据页 / Lap 列表页）。
-* 按键：
+  * 在不同 BIKE 数据页（主数据页/扩展页/Lap 列表页）之间切换。
+* 主按键：
 
-  * CLICK：打开/关闭 BIKE 子菜单（如：返回数据页 / 查看 Lap / 清除本次骑行 / 返回主菜单）。
+  * CLICK：弹出/关闭 BIKE 子菜单（例如查看 Lap、清除本次骑行、返回主菜单）。
   * DOUBLE：打圈（Lap++），不改变当前页面。
-  * MID：预留功能（例如切换辅助视图等，可在后续版本使用）。
-  * LONG：进入设置页面 `SETTINGS_IN_MODE`，记录来源=BIKE。
+  * MID：预留扩展功能（如切换副视图）。
+  * LONG：进入设置页面 `SETTINGS_IN_MODE`（来源=BIKE）。
   * ULTRA：预留，不绑定行为。
 
-#### 2.3.3 MODE_GPX（轨迹记录）
+### 2.5 MODE_GPX 模式交互
 
 * 旋钮：
 
-  * 切换 GPX 的不同信息页（如“状态页 / 文件列表页”等）。
-* 按键：
+  * 在 GPX 状态页、文件列表页等不同子页之间切换。
+* 主按键：
 
   * CLICK：
 
-    * 在 `GPX_IDLE`：开始记录，进入 `GPX_RECORDING`。
-    * 在 `GPX_RECORDING`：暂停记录，进入 `GPX_PAUSED`。
-    * 在 `GPX_PAUSED`：继续记录，回到 `GPX_RECORDING`。
-  * DOUBLE：在当前轨迹文件上打一个 waypoint（打点），记录在 GPX 扩展或日志中。
-  * MID：预留功能（如切换显示模式）。
-  * LONG：进入设置页面 `SETTINGS_IN_MODE`（来源=GPX）。在设置中提供菜单项“停止记录并保存文件”，用户确认后从 RECORDING/PAUSED -> STOPPED -> IDLE。
-  * ULTRA：预留，不绑定行为。
+    * 在 `GPX_IDLE`：开始记录 → `GPX_RECORDING`；
+    * 在 `GPX_RECORDING`：暂停记录 → `GPX_PAUSED`；
+    * 在 `GPX_PAUSED`：恢复记录 → `GPX_RECORDING`。
+  * DOUBLE：在当前轨迹上打点（waypoint），写入 GPX 或日志。
+  * MID：预留扩展功能。
+  * LONG：进入设置页面 `SETTINGS_IN_MODE`（来源=GPX），在设置中提供“停止记录并保存文件”的菜单项。
+  * ULTRA：预留。
 
-#### 2.3.4 MODE_P_GEAR（0–100 测速）
+### 2.6 MODE_P_GEAR 模式交互
 
 * 旋钮：
 
-  * 在 P-GEAR 实时页面与历史记录页面之间切换。
-* 按键：
+  * 在“实时页面”和“历史记录页面”之间切换。
+* 主按键：
 
   * CLICK：
 
-    * 在 `PGEAR_IDLE`：清除当前测试的临时数据（本次用时等），不影响历史最佳成绩，保持 `PGEAR_IDLE`。
-    * 在 `PGEAR_FINISHED`：清除本次测试结果，回到 `PGEAR_IDLE`，保留历史最佳成绩。
-    * 在 `PGEAR_ARMED` / `PGEAR_RUNNING`：默认无动作。
+    * 在 `PGEAR_IDLE`：清空当前测试的临时数据（不影响历史最佳），仍保持 IDLE；
+    * 在 `PGEAR_FINISHED`：清空本次结果，回到 IDLE；保留历史最佳；
+    * 在 ARMED/RUNNING：默认不做处理。
   * DOUBLE：
 
-    * 在任意 P-GEAR 状态（IDLE/ARMED/RUNNING/FINISHED）下，强制重置为 `PGEAR_IDLE`（重测），保留历史最佳成绩。
+    * 在任意 PGEAR 状态下，重置为 `PGEAR_IDLE`（重测），保留历史最佳。
   * MID：预留。
   * LONG：进入设置页面 `SETTINGS_IN_MODE`（来源=P-GEAR）。
-  * ULTRA：预留，不绑定行为。
+  * ULTRA：预留。
 
 ---
 
@@ -227,174 +260,170 @@
 2. 上电首次启动时，RTC 初始值为编译时间：`__DATE__` + `__TIME__`。
 3. 设置页面中提供“时间设置”子页面：
 
-   * 用户可设置年月日时分秒；
-   * 更改时间后立即更新 RTC。
-4. 时间源选项（在设置页中可选）：
+   * 用户可设置年、月、日、时、分、秒；
+   * 修改后立即更新 RTC。
+4. 时间源选项：
 
-   * 仅手动设置；
-   * GNSS 自动同步（优先）。
-5. 时间源行为：
+   * “仅手动设置”；
+   * “GNSS 自动同步”（优先）。
+5. GNSS 自动同步逻辑：
 
-   * 编译时间只作为上电初始值，不作为持续时间源；
-   * 手动设置时间会立即修改 RTC，当时间源为“GNSS 自动同步”时，GNSS 可对其做小幅修正；
-   * GNSS 时间同步规则：
+   * 从 RMC/GGA 中获取时间和日期，要求状态有效（Status='A'）；
+   * 若 GNSS 时间与当前 RTC 差值 |Δt| < 2 s，则视为可用候选；
+   * 只有连续 N 次（建议 N=3）满足条件才实际更新 RTC，防止单次跳变；
+   * 首次成功同步时，在 UI 上显示“时间同步完成”提示 2 秒；
+   * 当 GNSS 长时间无有效时间（NMEA_OK=0）时，不强制回退，只保留 RTC 当前值。
+6. GPX `<time>`：
 
-     * 使用 RMC/GGA 中的时间和日期，要求状态有效（Status='A'）。
-     * 若 GNSS 时间与当前 RTC 时间差值 |Δt| < 2 s，视为候选同步值。
-     * 只有连续 N 次（建议 N=3）满足上述条件时，才执行同步，避免因单次异常跳变。
-     * 首次成功同步时，在 UI 上显示“时间同步完成”提示 2 秒。
-     * 若 GNSS 长时间无有效时间（如 NMEA_OK=0），则保持当前 RTC，不做强制回退。
-6. GPX `<time>` 字段：
-
-   * 所有 GPX `<time>` 必须统一使用 **UTC 时间**；
+   * 所有 GPX `<time>` 字段必须使用 **UTC 时间**；
    * 格式：`YYYY-MM-DDThh:mm:ssZ`；
-   * 由当前 RTC 时间通过时区转换得到（本项目可要求 RTC 内部直接维护 UTC，或维护本地时间并在写出前转换）。
-7. `timestamp_ms`：
+   * RTC 可以直接维护 UTC；如维护本地时间，应在写出 GPX 前进行 UTC 转换。
+7. `timestamp_ms` 约定：
 
-   * 所有结构体中 `timestamp_ms` 字段统一为**自上电以来的毫秒数**；
-   * 来源推荐使用 `esp_timer_get_time() / 1000`；
-   * 类型 `uint32_t`，约 49.7 天回绕，使用中要考虑回绕逻辑。
+   * 所有结构体中的 `timestamp_ms` 使用“自上电以来的毫秒数”；
+   * 使用 `esp_timer_get_time()/1000` 获取；
+   * 类型 `uint32_t`，需考虑约 49.7 天回绕。
 
 ---
 
-## 4. GNSS（NEO-M8N）
+## 4. GNSS（NEO-M8N）需求
 
-### 4.1 初始化 & 波特率配置
+### 4.1 初始化与波特率配置
 
 1. 拉高 `GPS_LDO_EN`（GPIO14），延时 ≥ 100 ms。
-2. UART1 使用 9600 bps 接收 NMEA。
-3. 通过 UBX `CFG-PRT` 配置 UART 端口波特率为 115200 bps。
-4. 发送 `CFG-CFG` 保存配置（保存到 GNSS 内部 Flash）。
-5. 重新将 UART1 配置为 115200 bps：
+2. UART1 初始配置为 9600 bps，接收 NMEA。
+3. 使用 UBX `CFG-PRT` 配置波特率为 115200 bps。
+4. 使用 `CFG-CFG` 保存配置到 GNSS 内部 Flash。
+5. 重新将 UART1 配置为 115200 bps，等待约 2 s。
+6. 判断是否在 115200 bps 收到有效 NMEA/UBX 数据：
 
-   * 等待约 2 秒，确认是否收到有效的 NMEA/UBX 数据。
-6. 若 115200 bps 下无有效数据：
+   * 若成功：后续使用 115200 bps。
+   * 若失败：
 
-   * 回退到 9600 bps，再尝试发送配置（最多重试 3 次）；
-   * 若仍失败：
+     * 回退到 9600 bps，重新尝试配置，最多重试 3 次；
+     * 若仍失败：
 
-     * 固定使用 9600 bps；
-     * 在心跳与外设状态中标记“GNSS baud change failed，fallback 9600”。
+       * 固定使用 9600 bps；
+       * 在心跳与外设状态中标记“GNSS baud change failed，fallback 9600”。
 
-### 4.2 星座 / 更新率 / NMEA 输出控制
+### 4.2 星座模式 / 更新率 / NMEA 报文
 
-* 星座模式（设置页可选）：
+* 星座模式（设置页面可选）：
 
   * GPS
   * GPS + BeiDou
   * GPS + GLONASS
-* 更新率（设置页可选）：
+* 更新率（设置页面可选）：
 
   * 1 Hz
   * 5 Hz
-* 默认配置：
+* 默认设置：
 
   * 星座：GPS + BeiDou；
   * 更新率：1 Hz。
 * 配置策略：
 
-  * 用户更改设置后：
+  * 用户修改时：
 
-    * 将配置写入 NVS（带版本号）；
-    * 立即通过 UBX 指令配置 GNSS；
+    * 写入 NVS 存储；
+    * 立即通过 UBX 配置 GNSS；
   * 上电时：
 
     * 从 NVS 读取配置；
-    * 若无有效配置则使用默认值；
-    * 无论 GNSS 内部记忆如何，ESP 端每次上电统一下发配置。
+    * 无有效配置则使用默认；
+    * 每次上电都主动下发配置，防止 GNSS 内部状态不一致。
 
-**高更新率时的 NMEA 限制：**
+**NMEA 精简（高更新率时）：**
 
-* 当更新率为 5 Hz（包括 P-GEAR 自动提升的情况）时：
+* 当更新率为 5 Hz 时：
 
-  * 必须通过 `UBX-CFG-MSG` 调整 NMEA 报文输出：
+  * 通过 `UBX-CFG-MSG` 配置：
 
-    * 保留 RMC 和 GGA（5 Hz）；
-    * GSA/GSV 等多卫星状态报文关闭或降为 1 Hz。
-  * DOP、卫星 SNR 等信息可以通过 UBX 消息（如 NAV-DOP、NAV-SAT）获取。
-* 本版本不启用 10 Hz 更新率；
+    * 保留 RMC、GGA 为 5 Hz；
+    * GSA/GSV 等报文关闭或降为 1 Hz；
+* DOP、卫星 SNR 等可通过 UBX NAV-DOP / NAV-SAT 获得。
 
-  * 若将来需要 10 Hz，将配合更高波特率（如 460800 bps）或 UBX-only 数据通道在线路图中另行定义。
+> 本版本不启用 10 Hz 更新率；如需启用，将结合更高波特率或 UBX-only 方案另行定义。
 
-### 4.3 数据结构与状态判定
+### 4.3 GNSS 数据结构
 
 ```c
 typedef struct {
-    uint32_t timestamp_ms;  // 自上电以来毫秒
+    uint32_t timestamp_ms;  // 自上电以来的毫秒计时
 
     double   lat;      // 纬度，度
     double   lon;      // 经度，度
     float    alt;      // GNSS 高度，m
     float    speed;    // 水平速度，m/s
-    float    course;   // 航向，度 0~360
+    float    course;   // 航向角，度 0~360
     float    hdop;     // 水平精度因子
     float    vdop;     // 垂直精度因子
     float    pdop;     // 位置精度因子
     uint8_t  sats;     // 使用卫星数
-    uint8_t  fix;      // 0: 无 / 2: 2D / 3: 3D
+    uint8_t  fix;      // 0: 无；2: 2D；3: 3D
     bool     valid;    // 定位是否有效
 } gnss_fix_t;
 ```
 
-**`valid` 判定：**
+### 4.4 `valid` 与 `NMEA_OK` 定义
 
-* 当 `fix >= 2` 且 `hdop < 5.0` 时，认为 `valid = true`；
-* 否则 `valid = false`。
+* `valid` 判定：
 
-**`NMEA_OK` 定义：**
+  * 当 `fix >= 2` 且 `hdop < 5.0` 时，认为 `valid = true`；
+  * 否则 `valid = false`。
+* `NMEA_OK` 定义：
 
-* 最近 5 秒内至少接收到并成功解析 1 条**有效** GGA 或 RMC（Status='A'），则 `NMEA_OK = 1`；
-* 否则 `NMEA_OK = 0`。
+  * 最近 5 秒内至少接收到一条有效 GGA 或 RMC（Status='A'，解析成功），则 `NMEA_OK = 1`；
+  * 否则为 0。
+* 当 `valid = false` 时：
 
-**其他说明：**
+  * 可继续输出最近一次有效定位的 `lat/lon/alt` 用于显示；
+  * 但心跳日志和外设状态中必须明确 `valid=0` 与 `NMEA_OK` 状态。
 
-* 当 `valid=false` 时，可以继续提供最近一次有效定位的 `lat/lon/alt`，方便图形显示，但心跳日志中必须标明 `valid=0` 与 `NMEA_OK` 状态，避免误判。
-
-### 4.4 GNSS 辅助气压计 P0 校准
+### 4.5 GNSS 辅助气压计校准 P0
 
 * 触发条件：
 
-  * `fix = 3D`；
-  * `valid = true`；
+  * `fix = 3D` 且 `valid = true`；
   * `hdop < 2.0`；
-  * 水平速度 `speed < 2 m/s`（减小运动时高度噪声）。
+  * 水平速度 `speed < 2 m/s`。
 * 触发频率：
 
-  * 每 5–10 秒进行一次校准。
-* 算法：
+  * 每 5–10 s 尝试校准一次。
+* 计算流程：
 
-  * 使用当前 GNSS 高度 `h_gnss` 与气压计实测气压 `P`，根据 ISA 标准大气模型反算海平面参考气压 `P0_meas`；
-  * 使用一阶低通滤波更新 `P0`：
-    [
-    P0_{\text{new}} = \alpha \cdot P0_{\text{meas}} + (1-\alpha)\cdot P0_{\text{old}}
-    ]
-
-    * 建议 `alpha ≈ 0.1`；
-  * 得到的 `P0` 用于后续高度计算，平滑地贴近 GNSS 高度。
+  1. 取当前 GNSS 高度 `h_gnss` 和气压计气压 `P`；
+  2. 根据标准大气模型反算海平面气压 `P0_meas`；
+  3. 使用一阶低通：
+     [
+     P0_{\text{new}} = \alpha P0_{\text{meas}} + (1-\alpha) P0_{\text{old}}
+     ]
+     建议 `α ≈ 0.1`；
+  4. 使用 `P0` 进行后续高度计算，平滑追踪 GNSS 高度。
 
 ---
 
-## 5. 传感器系统（IMU / MAG / BARO）
+## 5. 传感器系统（IMU / MAG / BARO + Mahony）
 
 ### 5.1 坐标系约定
 
 统一车体坐标系（右手系）：
 
-* X：前进方向；
-* Y：车体左侧方向；
-* Z：垂直向上。
+* X 轴：车辆前进方向；
+* Y 轴：车辆左侧方向；
+* Z 轴：垂直向上。
 
-IMU/MAG 安装方向需通过轴变换统一到该坐标系。
+IMU / MAG 原始数据需通过轴变换统一到该坐标系。
 
 ### 5.2 IMU（LSM6DSR）
 
 * I2C 地址：0x6A
-* 工作配置：
+* 推荐配置：
 
   * ODR：104 Hz；
-  * 加速度：±4 g；
-  * 陀螺仪：±1000 dps。
-* 轴变换（板上安装方向）：
+  * 加速度量程：±4 g；
+  * 陀螺仪量程：±1000 dps。
+* 轴变换（根据实物安装方向）：
 
 ```c
 ax = -ax_raw;
@@ -406,25 +435,25 @@ gy =  gy_raw;
 gz = -gz_raw;
 ```
 
-* 单位：
+* 单位要求：
 
-  * 加速度在结构体中使用 m/s²（需将原始值乘以量程比例）；
-  * 角速度在结构体中使用 dps（度每秒），Mahony 算法内部可转换为 rad/s。
-* 输出：
+  * 加速度：在结构体中以 m/s² 存储（需转换）；
+  * 角速度：以 dps 存储，Mahony 内部需要时可转换为 rad/s。
+* 输出内容：
 
-  * 原始含重力加速度：`ax, ay, az`；
-  * 角速度：`gx, gy, gz`；
-  * 温度：`imu_temp_c`（°C）。
+  * `ax/ay/az`：含重力加速度；
+  * `gx/gy/gz`：角速度；
+  * `imu_temp_c`：IMU 温度（°C）。
 
 ### 5.3 磁力计（LIS2MDL）
 
-* I2C 地址：0x1E；
-* ODR ≥ 20 Hz；
-* 校准结构体：
+* I2C 地址：0x1E
+* ODR ≥ 20 Hz
+* 软铁/硬铁校准结构：
 
 ```c
 typedef struct {
-    float m_matrix[9];   // 3x3 软铁矩阵，按行存储
+    float m_matrix[9];   // 3x3 软铁矩阵
     float m_offset[3];   // 3x1 硬铁偏移
 } mag_calib_t;
 ```
@@ -432,136 +461,133 @@ typedef struct {
 * 初始值：
 
   * `m_matrix` 为单位矩阵；
-  * `m_offset` 为全 0。
-* 校准流程（设置 → 传感器校准 → 磁力计校准）：
+  * `m_offset` 为 0。
+* 校准流程：
 
-  * UI 提示用户在 30–60 秒内缓慢、多方向地旋转设备；
-  * 采集足够多的磁场样本；
-  * 在 MCU 端拟合软铁/硬铁参数，更新 `m_matrix` 与 `m_offset`；
-  * 成功后提示“校准成功”，失败则“校准失败：数据不足/拟合失败”等。
+  * 设置页面中提供“磁力计校准”；
+  * UI 提示用户在 30–60 秒内多方向旋转设备；
+  * 收集样本，拟合软铁/硬铁参数；
+  * 拟合成功后更新 `m_matrix` 与 `m_offset`，提示“校准成功”；
+  * 拟合失败提示原因（数据不足/拟合失败）。
 * 存储：
 
-  * 校准结果以二进制形式存储在 NVS 中（带版本号）。
-  * 提供“恢复默认磁力计校准”菜单（重置为单位矩阵+0 偏移）。
-* 温度字段：
+  * 结果存储于 NVS，带版本号；
+  * 提供“恢复默认磁力计校准”（重置为单位矩阵+0 偏移）。
+* 温度：
 
-  * 若芯片支持温度测量，填充 `mag_temp_c`；
+  * 若芯片支持，填入 `mag_temp_c`；
   * 否则填 `NAN`。
 
 ### 5.4 气压计（BMP388）
 
-* I2C 地址：0x76；
-* 建议配置：
+* I2C 地址：0x76
+* 推荐配置：
 
   * 模式：Normal；
-  * Pressure OSR×4，Temp OSR×1；
+  * Pressure OSR×4；
+  * Temp OSR×1；
   * IIR 滤波系数 ≥ 3；
   * ODR ≥ 25 Hz。
 * 输出：
 
   * `pressure`：Pa；
   * `baro_temp_c`：°C；
-  * `altitude`：m，使用 ISA 标准大气模型计算：
-    [
-    h = \frac{T_0}{L}\left[\left(\frac{P_0}{P}\right)^{\frac{R L}{g}} - 1\right]
-    ]
+  * `altitude`：m，根据标准大气公式计算：
 
-    * T0 = 288.15 K，L=0.0065 K/m；
-    * R = 287.05 J/(kg·K)，g=9.80665 m/s²；
-    * `P0` 来自 4.4 的 GNSS 辅助校准。
-* 显示时：
+[
+h = \frac{T_0}{L}\left[\left(\frac{P_0}{P}\right)^{\frac{RL}{g}} - 1\right]
+]
 
-  * 心跳/外设状态页面中以 kPa 显示气压，`p_kpa = pressure / 1000.0f`。
+其中：
 
-### 5.5 统一传感器数据结构
+* T0 = 288.15 K，L = 0.0065 K/m
+* R = 287.05 J/(kg·K)，g = 9.80665 m/s²
+* `P0` 为 4.5 中 GNSS 辅助校准得到的海平面气压。
+
+显示时：
+
+* 外设状态页面以 kPa 显示：`p_kpa = pressure / 1000.0f`。
+
+### 5.5 传感器统一数据结构
 
 ```c
 typedef struct {
-    uint32_t timestamp_ms;         // 自上电以来毫秒
+    uint32_t timestamp_ms;         // 自上电以来的毫秒计数
 
     // IMU
     float ax, ay, az;              // 含重力加速度，m/s²
-    float ax_lin, ay_lin, az_lin;  // 线性加速度（Mahony 输出），m/s²
+    float ax_lin, ay_lin, az_lin;  // 线性加速度，m/s²（Mahony 输出）
     float gx, gy, gz;              // 角速度，dps
     float gx_grav, gy_grav, gz_grav; // 重力向量估计，m/s²
     float imu_temp_c;              // IMU 温度，°C
 
     // MAG
-    float mx, my, mz;              // 磁场（经过矩阵+偏移校准后）
-    float mag_temp_c;              // °C（不支持时用 NAN）
+    float mx, my, mz;              // 磁场（经校准）
+    float mag_temp_c;              // 磁力计温度，°C（不支持时为 NAN）
 
     // BARO
     float pressure;                // Pa
-    float altitude;                // 高度，m
+    float altitude;                // m
     float baro_temp_c;             // 气压计温度，°C
 } sensor_sample_t;
 ```
 
-> 本版本要求 `ax_lin/ay_lin/az_lin` 和 `gx_grav/gy_grav/gz_grav` 必须由 Mahony 姿态解算计算得到，不允许为空或简单置零。
-
 ### 5.6 采样节奏与下采样
 
-* IMU（加速度 + 陀螺仪）原始采样：104 Hz；
-* MAG 原始采样：20–50 Hz；
-* Mahony AHRS 更新：50 Hz（由传感器任务驱动），每次更新使用最近一次 IMU+MAG 数据；
-* BARO：ODR≥25 Hz，可下采样到 10–20 Hz 用于高度和垂直速度估计；
-* UI 刷新与数据更新：10–20 Hz；
+* IMU（加计+陀螺）：104 Hz；
+* MAG：20–50 Hz；
+* Mahony 姿态解算：约 50 Hz；
+* BARO：ODR ≥ 25 Hz，可下采样到 10–20 Hz 用于高度与垂直速度；
+* UI 更新：10–20 Hz；
 * 心跳：每 5 s。
 
-### 5.7 Mahony 姿态解算（**必须实现**）
+### 5.7 Mahony 姿态解算（必须实现）
 
 **输入：**
 
-* 加速度：`ax, ay, az`（m/s²，已转换到车体坐标系）；
-* 角速度：`gx, gy, gz`（dps，内部转换为 rad/s）；
-* 磁场：`mx, my, mz`（已做软铁/硬铁校准，单位任意，在算法内归一化）。
+* `ax/ay/az`（m/s²，车体坐标系）；
+* `gx/gy/gz`（dps，内部转 rad/s）；
+* `mx/my/mz`（已做软铁/硬铁校正）。
 
 **更新频率：**
 
-* Mahony 算法更新频率约 50 Hz；
-* 使用精确的 `dt`（单位 s），`dt` 要求误差 < 5%。
+* 约 50 Hz，使用精确 `dt`（s），误差 < 5%。
 
-**算法行为：**
+**算法要求：**
 
-* 维护四元数 `q` 作为姿态状态量（地球系→车体系）。
 * 使用 Mahony 互补滤波：
 
-  * 利用陀螺积分给出短期预测；
-  * 利用加速度与磁力计测得的重力/地磁方向纠正漂移；
-  * 核心参数：比例增益 `Kp`，积分增益 `Ki`（可根据实际调整，Ki 不稳定可置 0）。
-* 加速度异常处理：
+  * 陀螺积分给出短期预测；
+  * 利用加速度/磁力计方向做误差反馈，纠正漂移；
+  * 使用可配置的比例增益 `Kp`、积分增益 `Ki`；
+* 加速度振动时：
 
-  * 当加速度模长偏离重力显著（如 |a| > 1.2g）可降低加速度在姿态更新中的权重，避免起步/颠簸时姿态乱跳。
-* 磁场异常处理：
+  * 当加速度模长偏离 1g 过大，如 `|a| > 1.2g`，降低加速度权重；
+* 磁场异常时：
 
-  * 当磁场模长与标定值差异过大（如 ±30%）时，可降低磁场权重或暂时跳过磁修正，避免磁干扰导致航向突变。
+  * 当磁场模长与标定值差异 >30% 时，降低磁场权重或跳过磁修正。
 
 **输出：**
 
-1. 四元数 `q`；
-2. 欧拉角（roll/pitch/yaw，度）；
-3. 重力向量在车体坐标系下分量 `g_body = (gx_grav, gy_grav, gz_grav)`；
-4. 线性加速度（去重力）：
-   `ax_lin = ax - gx_grav` 等。
+1. 姿态四元数 `q`；
+2. 欧拉角 roll/pitch/yaw（度）；
+3. 重力向量在车体坐标系下：`gx_grav/gy_grav/gz_grav`；
+4. 线性加速度：`ax_lin = ax - gx_grav` 等。
 
-**与 `sensor_sample_t` 的映射：**
+**与结构体映射：**
 
-* `gx_grav/gy_grav/gz_grav`：Mahony 计算的重力向量分量（单位 m/s²）；
-* `ax_lin/ay_lin/az_lin`：IMU 实测加速度减去重力分量；
-* 欧拉角：
+* `gx_grav/gy_grav/gz_grav`：Mahony 输出重力分量；
+* `ax_lin/ay_lin/az_lin`：去重力之后的线性加速度。
 
-  * 不直接存入 `sensor_sample_t`，但需通过 API 提供给上层（例如 `sensor_get_euler()`），用于 UI 坡度显示、P-GEAR 分析等。
-
-**对上层功能的支持：**
+**对上层功能支持：**
 
 * BIKE：
 
-  * 坡度（%）可基于姿态 + 高度变化进行更稳定计算；
-  * 垂直速度可利用高度变化 + 线性加速度估计。
+  * 坡度（%）可基于 pitch + 高度变化计算；
+  * 垂直速度可由高度变化和线性加速度综合估算。
 * P-GEAR：
 
-  * 起步检测使用“前向线性加速度”结合 GNSS（详见第 8 章）；
-  * 车辆侧倾/上下坡对加速度的影响可通过姿态解算修正。
+  * 利用前向线性加速度进行起步检测（见第 8 章）。
 
 ---
 
@@ -569,36 +595,34 @@ typedef struct {
 
 ### 6.1 文件系统与挂载
 
-* 使用 FATFS 文件系统；
-* 通过 SDMMC 主机（4-bit SDIO + DMA）挂载；
-* 上电后尝试挂载 SD 卡：
+* 使用 FATFS，底层为 SDMMC 4-bit + DMA。
+* 上电后：
 
-  * 若挂载失败：
+  * 尝试挂载 SD 卡；
+  * 若失败：
 
-    * 禁用 GPX 功能；
-    * 在外设状态页显示 `SD: mounted=0 err=xxx`；
-    * 在日志中记录错误。
-* 成功挂载后检查 `/GPX/` 目录：
+    * 禁用 GPX 记录功能；
+    * 外设状态页显示 `SD: mounted=0 err=xxx`；
+    * 日志记录错误。
+* 挂载成功后检查 `/GPX/` 目录：
 
-  * 不存在则尝试创建；
-  * 创建失败时：
+  * 若不存在，尝试创建；
+  * 创建失败：
 
-    * 禁用 GPX 功能；
+    * 禁用 GPX；
     * 提示“GPX 目录错误”。
 
 ### 6.2 文件命名与 GPX 结构
 
-* 文件路径：`/GPX/YYYYMMDD_HHMMSS.gpx`；
-* 文件名时间戳来自 RTC 当前时间（UTC/本地由实现统一设计）；
-* GPX 版本：1.1；
-* 结构：
+* 文件路径：`/GPX/YYYYMMDD_HHMMSS.gpx`，时间来自 RTC。
+* 使用 GPX 1.1 标准：
 
   * `<gpx>` 根元素；
-  * `<trk>`：一条轨迹；
-  * `<trkseg>`：若干段；
-  * `<trkpt>`：每个记录点；
+  * `<trk>` 包含一条轨迹；
+  * `<trkseg>` 表示一个连续记录片段；
+  * `<trkpt>` 为轨迹点。
 
-每个 `<trkpt>` 示例：
+**`<trkpt>` 示例：**
 
 ```xml
 <trkpt lat="39.123456" lon="116.123456">
@@ -613,192 +637,188 @@ typedef struct {
 </trkpt>
 ```
 
-> 当前版本不扩展加速度/磁场/电池等额外字段，仅使用上述速度、航向、气压、温度。
+> 当前版本扩展字段仅包括速度、航向、气压、温度。
 
 ### 6.3 写点策略
 
-在 `GPX_RECORDING` 状态下，满足以下条件之一即认为“需要写一个点”（写入**内存缓冲**）：
+在 `GPX_RECORDING` 状态下，满足以下任一条件即认为需记录一个点（写入内存缓冲）：
 
-1. 距离上一个点时间间隔 ≥ 1 s；
-2. 与上一个点水平距离差 ≥ 5 m。
+1. 距离上一个点的时间间隔 ≥ 1 s；
+2. 与上一个点的水平距离 ≥ 5 m。
 
 **静止过滤：**
 
-* 若当前速度 < 0.5 m/s 且与上一个点的水平距离 < 2 m，则可以忽略本次写点（认为静止）。
+* 若当前速度 < 0.5 m/s 且与上一个点距离 < 2 m，则可跳过该点，认为静止。
 
 **频率限制：**
 
-* 即使距离条件频繁满足，也需保证连续两点之间时间间隔 ≥ 0.5 s，避免异常高频写点。
+* 保护性限制：两点间时间间隔最小为 0.5 s，避免异常高频写点。
 
 **文件膨胀控制：**
 
-* 允许设定每小时最大写点数量（例如 7200 点，平均 0.5 s/点）；超过后：
+* 可设置每小时最大点数（如 7200 点），超过后：
 
-  * 优先执行时间条件（≥1 s）；
-  * 忽略仅由 5 m 距离条件触发的多余写点。
-
-> 注意：“写点”此处指写入 RAM 缓冲，不等于立刻写入 SD 卡。
+  * 优先保留时间间隔≥1 s 的点；
+  * 距离触发的多余点可忽略。
 
 ### 6.4 暂停、分段与停止
 
 * 暂停：
 
-  * 手动暂停（CLICK）或 Auto Pause 时：
+  * 手动暂停（按键）或 Auto Pause 时：
 
-    * 结束当前 `<trkseg>`（写入闭合标签）；
-    * 状态进入 `GPX_PAUSED`。
+    * 写入当前 `<trkseg>` 的闭合标签；
+    * 状态切换到 `GPX_PAUSED`。
 * 恢复：
 
-  * 再次 CLICK：
+  * 再次按键开始：
 
-    * 新建 `<trkseg>` 开始记录；
-    * 状态返回 `GPX_RECORDING`。
+    * 新建 `<trkseg>`；
+    * 状态回到 `GPX_RECORDING`。
 * 停止记录：
 
-  * 在设置菜单 `SETTINGS_IN_MODE` 中选择“停止记录并保存文件”：
+  * 在设置页面中选择“停止记录并保存文件”：
 
-    * 若当前为 `GPX_RECORDING` 或 `GPX_PAUSED`：
+    * 若当前状态为 RECORDING 或 PAUSED：
 
-      * 写入所有未写 `<trkpt>` 到 RAM 缓冲；
-      * 将缓冲 flush 到 SD；
-      * 正确闭合 `<trkseg>`、`<trk>`、`<gpx>` 标签；
-      * 调用 `f_sync`、关闭文件；
-      * 状态切换到 `GPX_STOPPED`，然后清理状态返回 `GPX_IDLE`。
+      * 写入剩余缓冲的 `<trkpt>`；
+      * 关闭 `<trkseg>`、`<trk>`、`<gpx>`；
+      * `f_sync` 并关闭文件；
+      * 状态 → `GPX_STOPPED` → 清理后回到 `GPX_IDLE`。
 
 ### 6.5 写入错误与 SD 故障处理
 
 * 若 `f_write` 或 `f_sync` 返回错误：
 
   * LOG_TASK 记录错误；
-  * 尝试重新挂载 SD 卡，最多重试 3 次；
+  * 尝试重新挂载 SD 卡，最多 3 次；
   * 若仍失败：
 
-    * 停止当前记录，切换到 `GPX_STOPPED` / `GPX_IDLE`；
+    * 停止记录，关闭文件；
     * UI 显示“SD 错误，记录已停止”；
-    * 后续不再尝试写入当前文件。
-* 由于无热插拔检测：
+    * 当前文件可能不完整，但要尽力保证格式正确。
+* 记录过程中用户拔卡：
 
-  * 用户在记录过程中拔出 SD 卡，被视为上述写入错误场景的一种。
+  * 视为上述错误的一种。
 
-### 6.6 写缓冲与块写策略（双缓冲）
+### 6.6 双缓冲与批量写卡
 
-为降低 SD 卡写入延迟和写放大：
+为降低写放大与延迟：
 
-1. **双缓冲：**
+1. 在 PSRAM 中分配两个缓冲：`buf_a` 和 `buf_b`，每个 4KB 或 8KB；
+2. LOG_TASK 将 GPX 点/日志文本写入当前缓冲：
 
-   * 在 PSRAM 中分配两个缓存块 `buf_a`、`buf_b`，每个 4KB 或 8KB；
-   * LOG_TASK 将 GPX 点和日志文本写入“当前活动缓冲”（如 `buf_a`）；
-   * 当当前缓冲写满时：
+   * 缓冲满时：
 
-     * 切换到另一缓冲 `buf_b` 接收新数据；
-     * 将已满缓冲一次性通过 `f_write` 写入 SD 卡。
-2. **块对齐：**
-
-   * 尽量保证每次写入大小接近 4KB 对齐，以减少 Flash 写放大。
-3. **Flush 时机：**
+     * 切换到另一缓冲；
+     * 将旧缓冲一次性 `f_write`；
+3. Flush 时机：
 
    * 缓冲写满；
-   * 用户暂停/停止 GPX 记录；
+   * 用户暂停/停止记录；
    * 低电量准备关机；
-   * 定时安全 flush：例如 3–5 s 内没有写满缓冲也应将现有数据写出并 `f_sync`，防止断电丢失太多。
-4. **LOG_TASK 行为：**
-
-   * 仅负责从 `gpx_queue` / `log_queue` 取数据写入 RAM 缓冲；
-   * 实际对 SD 的 `f_write` / `f_sync` 由写缓冲模块统一控制；
-   * 避免高频小写导致长时间 `f_sync` 卡顿。
+   * 周期性安全 flush（如每 3–5 s），防止断电丢失过多数据。
 
 ---
 
 ## 7. 自行车码表（Bike Computer，MODE_BIKE）
 
-### 7.1 实时数据内容与定义
+### 7.1 实时数据内容
 
-至少显示以下数据（可分多页）：
+至少包括：
 
-* 当前速度（km/h）
-* 平均速度（移动时间平均，不包含 Auto Pause 期间）
-* 最大速度（当前骑行中出现的最大有效速度）
-* 当次骑行时间 / 总时间：
+* 当前速度：km/h；
+* 平均速度：移动时间平均（Auto Pause 期间不计）；
+* 最大速度：本次骑行中最大速度；
+* 本次骑行时间 / 总时间：
 
-  * 当次骑行时间：从本次开始记录起的有效骑行时间（排除 Auto Pause）
-  * 总时间：包括暂停时间的总计
+  * 本次骑行时间：排除 Auto Pause 时间；
+  * 总时间：包含暂停时间；
 * 当前里程 / 累计里程：
 
-  * 当前里程：本次骑行距离
-  * 累计里程：可选持久化，所有骑行累计（可在设置中查看/清零）
-* 当前高度（m）
+  * 当前里程：本次骑行距离；
+  * 累计里程：可选持久化（总骑行距离），可清零；
+* 当前高度（m）；
 * 坡度（%）：
 
-  * 可结合气压高度与姿态解算的俯仰角估算；
-* 累计爬升 / 累计下降（m）
+  * 可结合姿态 pitch 和高度变化计算；
+* 累计爬升 / 累计下降（m）；
 * 航向（°）：
 
-  * GNSS 航向 + MAG/AHRS 综合；
+  * 综合 GNSS 航向与 MAG/AHRS 输出；
 * 垂直速度（m/h 或 m/s）：
 
-  * 建议使用最近 10–30 s 高度变化的滑动平均。
+  * 建议基于高度变化的滑动平均。
 
 **异常值处理：**
 
-* 对速度、航向、海拔等 GNSS 数据需要简单异常值滤波（例如速度突然 >100km/h 的孤立点可丢弃）。
+* 对速度、航向、高度进行简单异常滤波，例如：
+
+  * 单个点速度 > 100 km/h 且孤立，可判为无效点。
 
 ### 7.2 Lap（圈）
 
-* 双击主按键触发打圈：
+* 用双击按键触发打圈：
 
-  * Lap 序号自 1 开始递增；
-  * 对每个 Lap 记录：
+  * Lap 序号从 1 递增；
+  * 每个 Lap 记录：
 
-    * Lap 距离（从上一圈或起点算起）；
-    * Lap 时间（移动时间）；
-    * Lap 平均速度（Lap 距离 / Lap 移动时间）。
-* Lap 上限：
+    * Lap 距离；
+    * Lap 移动时间；
+    * Lap 平均速度。
+* 上限：
 
-  * 单次骑行最多 999 个 Lap，超过后新 Lap 触发将被忽略，并在日志中提示溢出；
+  * 每次骑行最多 999 个 Lap，超过后新 Lap 忽略，并记录“Lap overflow”日志。
 * Lap 查看：
 
-  * 在 BIKE 子菜单中提供“Lap 列表”页面；
-  * 按 Lap 序号显示关键数据；
-  * 可通过旋钮翻页浏览。
-* Lap 数据在本次骑行结束 / 设备重启后默认清空，不强制持久化。
+  * BIKE 子菜单中提供“Lap 列表”页面；
+  * 按 Lap 序号显示关键信息；
+  * 旋钮翻页浏览。
+* Lap 不强制持久化，随本次骑行结束或重启清空。
 
-### 7.3 自动暂停（Auto Pause）
+### 7.3 Auto Pause（自动暂停）
 
 * 条件：
 
-  * 当速度 < `V_pause_threshold` 且持续时间 > `T_pause_delay`：
+  * 当速度 < `V_pause_threshold` 且持续时间 > `T_pause_delay` 时：
 
-    * 进入 Auto Pause 状态（不计入移动时间、不增加里程/GPX 写点）；
-  * 当速度 > `V_resume_threshold` 时恢复正常骑行；
-* 默认参数（示例）：
+    * 进入 “Auto Pause” 状态；
+    * 暂停累计移动时间和里程；
+  * 当速度 > `V_resume_threshold` 时：
+
+    * 自动恢复骑行；
+    * 重新计入移动时间和里程。
+* 默认参数（可配置）：
 
   * `V_pause_threshold = 3 km/h`
   * `V_resume_threshold = 5 km/h`
   * `T_pause_delay = 5 s`
-* 可配置范围：
+* 配置范围：
 
-  * 速度阈值：1–10 km/h，步长 1 km/h；
-  * 时间延迟：1–30 s，步长 1 s。
-* Auto Pause 参数在 BIKE 和 GPX 模式共用，以保证“移动时间”的定义一致。
+  * 速度阈值 1–10 km/h，步长 1 km/h；
+  * 时间延迟 1–30 s，步长 1 s。
+* 该参数在 BIKE 和 GPX 模式共用（保持“移动时间”定义一致）。
 
-### 7.4 自动分圈（Auto Lap）
+### 7.4 Auto Lap（自动分圈）
 
-* 根据累计距离自动打圈：
+* 按距离自动打圈：
 
-  * 用户可在“自动暂停/自动分圈”页面设置 Auto Lap 距离；
-  * 默认关闭；
-  * 可选范围：1–50 km，步长 1 km。
-* Auto Lap 与手动打圈同时存在：
-
-  * Auto Lap 打圈的 Lap 序号与手动 Lap 共用一条序号链。
+  * 设置中提供 Auto Lap 开关和距离；
+  * 距离范围 1–50 km，步长 1 km；
+  * 默认关闭。
+* Auto Lap 与手动 Lap 共用同一 Lap 序号。
 
 ### 7.5 持久化与溢出
 
-* 持久化建议：
+* 建议持久化：
 
-  * 可在 NVS 中持久化累计里程、累计骑行时间；
-  * 若数值超过一定范围（如 > 99999 km），可提示用户“是否清除统计”，或自动回绕。
-* 单次骑行数据（本次里程、Lap 列表等）默认随设备重启清空。
+  * 累计里程；
+  * 累计骑行时间；
+* 当累积数值太大（如 > 99999 km）时：
+
+  * 可提示用户清零；
+  * 或自动回绕，但需在 UI 明确显示格式。
+* 本次骑行相关数据（包括 Lap）默认在电源循环后清空。
 
 ---
 
@@ -806,131 +826,110 @@ typedef struct {
 
 ### 8.1 功能定位
 
-* 模拟汽车 0–100 km/h 加速测试；
-* 支持自定义起始/结束速度范围（如 0–50、20–100 等）；
-* 提供本次成绩、最佳成绩与历史记录列表。
+* 用于测量车辆从 V_start 到 V_end 的加速时间；
+* 支持 V_start/V_end 自定义（例如 0–50、20–100 km/h）。
 
-### 8.2 设置项与单位
+### 8.2 设置项
 
 * 起始速度 `V_start`（km/h）；
 * 结束速度 `V_end`（km/h，必须 > V_start）；
 * 触发加速度阈值 `G_trigger`：
 
-  * 内部以 m/s² 存储和计算；
-  * UI 中以 g 显示，换算 `1 g ≈ 9.80665 m/s²`；
+  * 以 m/s² 存储，UI 以 g 显示；
+  * 换算：1 g ≈ 9.80665 m/s²；
 * 触发速度阈值 `V_trigger`（km/h）：
 
-  * 防止低速噪声，只有当车速首次超过 `V_trigger` 时，才允许 P-GEAR 状态机进入 ARMED。
+  * 只有当车速超过 `V_trigger` 后，才允许状态机进入 ARMED；
+  * 用于过滤低速噪声。
 
-### 8.3 状态机逻辑
+### 8.3 P-GEAR 状态机
 
 状态：`PGEAR_IDLE`、`PGEAR_ARMED`、`PGEAR_RUNNING`、`PGEAR_FINISHED`。
 
 * `PGEAR_IDLE`：
 
-  * 显示当前参数，等待车速接近 `V_start`；
-  * “接近 `V_start`”定义：`|speed - V_start| <= 2 km/h`；
-  * 当速度第一次超过 `V_trigger` 后，才认为可以武装。
+  * 等待车辆速度接近 `V_start`；
+  * “接近”定义为 `|speed - V_start| <= 2 km/h`。
 * `PGEAR_ARMED`：
 
-  * 当前速度接近或略低于 `V_start`，系统已经“准备好”；
-  * 当 `speed >= V_start` 且加速度 / AHRS 条件满足时转入 RUNNING。
+  * 已经接近 V_start，且速度 > V_trigger；
+  * 当 `speed >= V_start` 且 `a_forward >= G_trigger` 时开始计时（进入 RUNNING）。
 * `PGEAR_RUNNING`：
 
-  * 计时中；
-  * 根据起点（由 IMU 辅助或 GNSS）和当前 GNSS 速度，实时更新用时。
+  * 计时进行中，使用 IMU 起步时间 + GNSS 速度确定；
+  * 当 GNSS 速度达 `V_end` 时结束计时。
 * `PGEAR_FINISHED`：
 
-  * 当 `speed >= V_end` 时停止计时，记录本次测试；
-  * UI 显示本次用时、本次最高速度等。
+  * 记录本次测试结果（起止速度、用时、最大速度等）；
+  * 等待用户操作（清除/重测）。
 
 ### 8.4 GNSS 刷新率自动提升
 
-* 当进入 `MODE_P_GEAR` 时：
+* 进入 `MODE_P_GEAR` 时：
 
-  * 记录当前 GNSS 更新率设置（1 Hz 或 5 Hz）；
+  * 保存当前用户设置更新率；
   * 若当前更新率 < 5 Hz：
 
-    * 通过 UBX 将更新率临时提高到 5 Hz；
-    * 并按 4.2 要求精简 NMEA（仅 5 Hz 的 RMC/GGA，GSV 等关闭或降频）。
-* 当退出 `MODE_P_GEAR` 时：
+    * 通过 UBX 将更新率临时设为 5 Hz；
+    * 同时精简 NMEA（仅 5 Hz 的 RMC/GGA，其他如 GSV 降成 1 Hz 或关闭）。
+* 退出 `MODE_P_GEAR` 时：
 
-  * 恢复用户原先配置的更新率和 NMEA 输出。
-
-> 本版本不启用 10 Hz 更新率。如后续需要 10 Hz，将结合更高波特率和 UBX-only 路径另行定义。
+  * 恢复用户原始设置。
 
 ### 8.5 IMU + Mahony 辅助起步检测
 
-为提高计时起点精度：
+1. 从 Mahony 中得到车体姿态和前向方向向量。
+2. 计算前向线性加速度 `a_forward`：
 
-1. 使用 Mahony 结果获取车体姿态：
+   * 将 `ax_lin/ay_lin/az_lin` 投影到车体前向（X 轴）方向。
+3. 当车辆仍在 IDLE/ARMED 状态时：
 
-   * 从姿态解算中得到前向方向向量 `forward`（在车体坐标系中通常接近 +X）。
-2. 在 IDLE/ARMED 状态：
+   * 若 `a_forward > A_start_threshold`（例如 0.2–0.3 g），记录起步时间 `t_start_imu`；
+4. 当 GNSS 速度首次达到 `V_start` 调整带时：
 
-   * 将线性加速度投影到前向方向，得到 `a_forward`；
-   * 对 `a_forward` 进行高通或阈值判断：
+   * 若当前时间与 `t_start_imu` 差值 < 1 s，则以 `t_start_imu` 作为计时起点；
+   * 否则使用 GNSS 达到 `V_start` 时刻作为起点。
+5. 若 AHRS 故障或线性加速度数据异常：
 
-     * 当 `a_forward > A_start_threshold`（例如 0.2–0.3 g）时，认为触发起步；
-     * 记录起步时刻 `t_start_imu`（使用 `timestamp_ms`）。
-3. 在随后 GNSS 样本中：
+   * 可退化为仅依赖 GNSS + 加速度阈值的逻辑。
 
-   * 当 GNSS 速度首次达到 `V_start` 或略高于 `V_start` 时：
+### 8.6 历史记录与最佳成绩
 
-     * 若最近一次 `t_start_imu` 与当前时间差 < 1 s，则以 `t_start_imu` 为计时起点；
-     * 否则以 GNSS 达到 `V_start` 的时刻为起点。
-4. 若 AHRS 故障或线性加速度异常：
+* 每次完成一次测试：
 
-   * 可关闭 IMU 辅助起步，退回纯 GNSS + G_trigger 的逻辑。
-
-### 8.6 历史记录、最佳成绩与清空
-
-* 每次完成测试（进入 `PGEAR_FINISHED`）记录：
-
-  * 时间戳（RTC）；
-  * `V_start` / `V_end`；
-  * 用时；
+  * 记录时间戳（RTC）、V_start/V_end、本次用时等；
 * 历史记录：
 
-  * 保存最近 N 条记录（建议 N=20）；
-  * 按时间排序（最新在前）；
-  * 存入 NVS（带版本号）。
+  * 保存最近 N 条（如 20 条），按时间排序（最新在前）；
+  * 持久化在 NVS 中，带版本号；
 * 最佳成绩：
 
-  * 自动维护一个“best time”（在所有历史中选择最小用时的记录）。
+  * 从历史中选取用时最短的一条作为“最佳成绩”；
 * 清空：
 
-  * 设置页面提供：
+  * 设置页面中提供：
 
-    * “清除 P-GEAR 历史记录”（删除所有历史记录）；
-    * “清除 P-GEAR 最佳成绩”（仅清空 best，历史记录保留）。
+    * “清除 P-GEAR 历史记录”；
+    * “清除 P-GEAR 最佳成绩”。
 
 ---
 
 ## 9. UI 设计与视觉规范
 
-### 9.1 视觉风格与字体
+### 9.1 视觉风格
 
+* 背景：默认浅色；
+* 文本：深色，关键信息可用高亮颜色（如绿色/橙色）；
 * 字体：
 
-  * 使用 LVGL 默认字体或自定义等宽/易读字体；
-  * 数字类大号字体（速度/时间）：高度约 32–48 px；
-  * 普通文本：高度 14–18 px。
-* 颜色：
-
-  * 浅色背景 + 深色文字为默认主题；
-  * 关键数字可使用高亮色（如绿色/橙色），但整体风格简洁；
+  * 数字大号（32–48 px）用于速度、时间等；
+  * 普通文本 14–18 px；
 * 主题：
 
-  * “显示与背光”页面中预留主题选项：浅色 / 深色；
-  * 若暂不实现深色主题，可将选项设为灰置。
-* 背光：
+  * 设置中预留“浅色/深色”主题选项；
+  * 如短期不实现深色，可暂时固定浅色。
 
-  * PWM 频率固定 2 kHz；
-  * 亮度 10–100%，步长 10%，可在设置中调整；
-  * 默认 50%。
-
-### 9.2 主菜单（第一屏）
+### 9.2 主菜单页面
 
 ```text
 +--------------------------------+
@@ -947,12 +946,12 @@ typedef struct {
 +--------------------------------+
 ```
 
-* LVGL 建议：
+* LVGL：
 
   * 根容器：`lv_obj`；
   * 标题：`lv_label`；
-  * 菜单：`lv_list` 或竖直排布 `lv_btn` + `lv_label`；
-  * 高亮项用 `LV_STATE_FOCUSED` 或自定义样式。
+  * 菜单：`lv_list` 或竖排 `lv_btn` + `lv_label`；
+  * 高亮项使用 `LV_STATE_FOCUSED` 样式。
 
 ### 9.3 BIKE 主数据页（Page 1）
 
@@ -971,8 +970,6 @@ typedef struct {
 | 双击：打圈   长按：设置        |
 +--------------------------------+
 ```
-
-* 每个数据块使用 `lv_obj` + 两个 `lv_label`（标题+数值）。
 
 ### 9.4 BIKE 扩展数据页（Page 2）
 
@@ -1032,8 +1029,6 @@ typedef struct {
 +--------------------------------+
 ```
 
-* 在“历史”视图中，将 `本次用时/最佳成绩` 区块替换为历史列表。
-
 ### 9.7 设置主界面
 
 ```text
@@ -1054,19 +1049,19 @@ typedef struct {
 +--------------------------------+
 ```
 
-* “返回（回原功能）”：回到进入设置前所在的模式（Bike/GPX/P-GEAR）；
-* “退出到主菜单”：直接回到 MAIN_MENU，不回原模式页面。
+* “返回（回原功能）”：返回进入设置之前的模式页面；
+* “退出到主菜单”：直接回主菜单，不回原模式。
 
-### 9.8 设置 → 显示与背光
+### 9.8 显示与背光设置
 
 * 可调参数：
 
   * 背光亮度：10–100%，步长 10%；
   * 自动熄屏时间：关闭 / 15 s / 30 s / 60 s；
-  * 主题：浅色 / 深色（可选实现）。
-* 调整亮度时实时生效。
+  * 主题：浅色 / 深色（可今后实现）。
+* 更改亮度时立即生效。
 
-### 9.9 设置 → 外设状态
+### 9.9 外设状态页面
 
 ```text
 +--------------------------------+
@@ -1095,10 +1090,10 @@ typedef struct {
 
 * 数据来源：
 
-  * 使用最近一次缓存的传感器/GNSS/电源数据；
-  * 进入该页面后，每 1 s 刷新一次显示。
+  * 使用最近一次传感器/GNSS/电源状态快照；
+  * 进入页面后每 1 s 更新一次。
 
-### 9.10 设置 → GPS 搜星详细信息
+### 9.10 GPS 搜星详细信息页面
 
 ```text
 +--------------------------------+
@@ -1118,23 +1113,52 @@ typedef struct {
 +--------------------------------+
 ```
 
-* Use：`*` 表示参与定位；
+* Use：`*` 表示使用中；
 * SYS：`G`=GPS，`B`=BeiDou，`R`=GLONASS 等；
-* 更新频率：1 Hz，从 UBX NAV-SAT 或类似报文读取。
+* 数据更新频率：1 Hz，从 UBX NAV-SAT 或类似报文获得。
 
 ### 9.11 Debug 调试页面
 
-建议内容：
+显示内容建议：
 
-* 固件版本号（如 v1.4.x）、编译时间；
-* 当前可用 Heap/PSRAM 及使用率；
+* 固件版本号、编译时间；
+* 可用 Heap/PSRAM 及使用率；
 * 关键任务栈余量；
-* 日志丢弃计数、心跳丢失计数等；
-* 最近一次看门狗触发（如果有）的信息。
+* 日志丢弃计数、心跳丢失计数；
+* 看门狗触发/复位信息等。
+
+### 9.12 UI 编码约束：Create / Update 分离
+
+为保持 UI 代码清晰，统一要求：
+
+1. 每个主页面至少实现两个函数：
+
+   ```c
+   void ui_xxx_create(lv_obj_t *parent);
+   void ui_xxx_update(const app_data_model_t *m);
+   ```
+
+2. `ui_xxx_create()`：
+
+   * 只创建和布局 LVGL 对象；
+   * 不访问 DataModel，不执行业务逻辑。
+
+3. `ui_xxx_update()`：
+
+   * 只从 `app_data_model_t` 读取数据；
+   * 调用 `lv_label_set_text()` 等更新显示；
+   * 不创建/销毁控件。
+
+4. 输入事件：
+
+   * 在 `INPUT_TASK` 中采样，通过 `input_event_queue` 传给 `SYS_TASK`；
+   * `SYS_TASK` 更新 DataModel；
+   * UI_TASK 周期性调用 `ui_xxx_update(&data_model)` 刷新显示；
+   * **禁止**在中断或输入任务中直接使用 LVGL API。
 
 ---
 
-## 10. 状态机定义（Mermaid）
+## 10. 状态机定义与实现
 
 ### 10.1 顶层模式状态机
 
@@ -1191,7 +1215,7 @@ stateDiagram-v2
     PGEAR_RUNNING --> PGEAR_FINISHED: speed>=V_end
 
     PGEAR_FINISHED --> PGEAR_IDLE: 短按清本次结果
-    PGEAR_IDLE --> PGEAR_IDLE: 短按清当前临时数据
+    PGEAR_IDLE --> PGEAR_IDLE: 短按清临时数据
 
     PGEAR_ARMED --> PGEAR_IDLE: 双击重测
     PGEAR_RUNNING --> PGEAR_IDLE: 双击重测
@@ -1210,7 +1234,7 @@ stateDiagram-v2
     BIKE_RIDING --> BIKE_RIDING: 双击 -> 打圈(Lap++)
 ```
 
-### 10.5 设置菜单导航
+### 10.5 设置菜单导航状态机
 
 ```mermaid
 stateDiagram-v2
@@ -1239,50 +1263,54 @@ stateDiagram-v2
     SETTINGS_MAIN --> [*]: 选"退出到主菜单"
 ```
 
+### 10.6 状态机实现规范（代码）
+
+* 对于复杂状态机（P-GEAR/GPX 记录/顶层模式机）：
+
+  * 优先采用“状态处理函数表 + 函数指针”的实现方式；
+  * 尽量避免巨大 `switch (state)`。
+* 为每个状态编写独立处理函数，如：
+
+  * `pgear_handle_idle()`
+  * `pgear_handle_armed()`
+  * `pgear_handle_running()`
+  * `pgear_handle_finished()`
+* 主调度函数中：
+
+  * 根据当前状态从函数表中取出处理函数并调用；
+  * 状态切换和 DataModel 修改集中在少数几个函数内执行，避免在多个地方随意改 `state`。
+
 ---
 
 ## 11. 日志与心跳（UART0）
 
-### 11.1 日志系统总则
+### 11.1 日志总则
 
-* 所有日志通过 `log_queue` 发送到 LOG_TASK；
-* LOG_TASK 将日志写入 UART 发送缓冲和/或 SD 写缓冲；
+* 所有日志通过 `log_queue` 发送至 LOG_TASK；
+* LOG_TASK 负责将日志：
+
+  * 输出到 UART0；
+  * （可选）写入 SD 卡日志文件；
 * 为避免阻塞：
 
-  * UART 发送采用非阻塞或短超时；
-  * 队列或缓冲满时允许丢弃日志，并记录“日志丢弃计数”；
-* 日志格式：
+  * UART 发送使用非阻塞或短超时；
+  * 队列满时允许丢弃日志，并累计“日志丢弃计数”。
 
-  * 文本行，人类可读；
-  * 不使用 JSON/二进制/CRC。
+### 11.2 心跳日志（每 5 s）
 
-### 11.2 心跳日志（每 5 秒）
+* HEARTBEAT_TASK 每 5 s 触发一次心跳输出；
+* 若系统繁忙或 UART 未连接，可允许跳过 1–2 次心跳，并记录“心跳丢失计数”。
 
-* HEARTBEAT_TASK 每 5 s 触发一次，允许 ±1 s 抖动；
-* 系统繁忙或串口不可用时，可允许跳过 1–2 次心跳，但需记录“心跳丢失计数”。
-
-**内容：**
+**心跳内容必须包含：**
 
 * 时间 `t`（`timestamp_ms`）；
 * 当前模式 `mode`；
-* GNSS：
-
-  * `fix/valid/sats/hdop/vdop/pdop/lat/lon/alt/NMEA_OK`；
-* IMU：
-
-  * `ax/ay/az/ax_lin/ay_lin/az_lin/gx/gy/gz/imu_temp_c`；
-* MAG：
-
-  * `mx/my/mz/mag_temp_c`；
-* BARO：
-
-  * `pressure`（kPa）、`altitude`、`baro_temp_c`；
-* SD：
-
-  * `mounted / last_err`；
-* 电池：
-
-  * 电压（V）、充电状态（chg=0/1）。
+* GNSS：`fix/valid/sats/hdop/vdop/pdop/lat/lon/alt/NMEA_OK`；
+* IMU：`ax/ay/az/ax_lin/ay_lin/az_lin/gx/gy/gz/imu_temp_c`；
+* MAG：`mx/my/mz/mag_temp_c`；
+* BARO：`pressure`（kPa）、`altitude`、`baro_temp_c`；
+* SD：`mounted/last_err`；
+* 电池：`电压/充电状态`。
 
 **示例：**
 
@@ -1299,198 +1327,292 @@ stateDiagram-v2
 
 ### 11.3 输入事件日志
 
-* 每次按键/旋钮事件：
+* 每次按键 / 旋钮事件：
 
 ```text
 [EVT] t=234567ms mode=MODE_BIKE type=BTN_DOUBLE_CLICK
 [EVT] t=234890ms mode=MODE_BIKE type=ENC_RIGHT
 ```
 
-* 若队列满导致日志丢弃，应在 Debug 页面中展示丢弃计数。
+* 如因队列满导致日志丢弃，需要在 Debug 页面展示“日志丢弃计数”。
 
 ---
 
-## 12. FreeRTOS 任务、通信与资源管理
+## 12. FreeRTOS 任务与资源管理
 
-### 12.1 任务列表与核心分配
+### 12.1 任务列表与核心绑定
 
-| 任务名            | 功能                       | 优先级 | 建议栈大小        | 建议绑核           |
-| -------------- | ------------------------ | --- | ------------ | -------------- |
-| UI_TASK        | LVGL 刷新与渲染               | 6   | 6144–8192 字节 | APP CPU（core1） |
-| HEARTBEAT_TASK | 心跳与系统状态汇总                | 4   | 2048–3072 字节 | APP CPU（core1） |
-| GNSS_TASK      | GNSS UART 收发解析           | 7   | 4096–6144 字节 | PRO CPU（core0） |
-| SENSOR_TASK    | IMU/MAG/BARO 采样 + Mahony | 6   | 4096–6144 字节 | PRO CPU（core0） |
-| LOG_TASK       | SD/GPX 批量写入与日志管理         | 5   | 4096–6144 字节 | PRO CPU（core0） |
-| SYS_TASK       | 顶层模式机与子状态机               | 6   | 4096–6144 字节 | PRO CPU（core0） |
-| POWER_TASK     | 电池电量测量与电源策略              | 4   | 2048 字节      | PRO CPU（core0） |
-| INPUT_TASK     | 按键/旋钮采样与事件识别             | 4   | 2048–3072 字节 | PRO CPU（core0） |
+| 任务名            | 功能                    | 优先级 | 建议栈大小        | 建议 CPU 核     |
+| -------------- | --------------------- | --- | ------------ | ------------ |
+| UI_TASK        | LVGL 刷新与渲染            | 6   | 6144–8192 字节 | APP 核（core1） |
+| HEARTBEAT_TASK | 心跳与系统状态汇总             | 4   | 2048–3072 字节 | APP 核（core1） |
+| GNSS_TASK      | GNSS UART 收发解析        | 7   | 4096–6144 字节 | PRO 核（core0） |
+| SENSOR_TASK    | IMU/MAG/BARO + Mahony | 6   | 4096–6144 字节 | PRO 核（core0） |
+| LOG_TASK       | SD/GPX 写入与日志管理        | 5   | 4096–6144 字节 | PRO 核（core0） |
+| SYS_TASK       | 顶层模式机与业务逻辑            | 6   | 4096–6144 字节 | PRO 核（core0） |
+| POWER_TASK     | 电池电量测量与电源策略           | 4   | 2048 字节      | PRO 核（core0） |
+| INPUT_TASK     | 按键/旋钮采样与事件识别          | 4   | 2048–3072 字节 | PRO 核（core0） |
 
-> 设计意图：
->
-> * core1 专注 UI（UI_TASK + HEARTBEAT 轻量任务），保证界面流畅；
-> * core0 承担 GNSS、传感器、日志、状态机、电源、输入等后台任务；
-> * 将 INPUT_TASK 放在 core0，有利于未来统一规划轻量运行/深度睡眠唤醒策略（如只保持 core0 运行）。
+设计意图：
 
-### 12.2 通信机制与队列
+* core1 专注 UI 刷新，保证界面流畅；
+* core0 处理 GNSS/传感器/日志/状态机/电源/输入等后台工作；
+* INPUT_TASK 放在 core0，有利于未来与低功耗/唤醒策略配合。
+
+### 12.2 队列与互斥量
 
 * 队列：
 
-  * `gnss_event_queue`：GNSS_TASK → SYS_TASK/UI_TASK；
-  * `sensor_event_queue`：SENSOR_TASK → SYS_TASK/UI_TASK；
+  * `gnss_event_queue`：GNSS_TASK → SYS/UI；
+  * `sensor_event_queue`：SENSOR_TASK → SYS/UI；
   * `input_event_queue`：INPUT_TASK → SYS_TASK；
-  * `log_queue`：各任务 → LOG_TASK；
-* 队列深度：
+  * `log_queue`：各模块 → LOG_TASK。
+* 队列深度建议：16–32。
+* 发送策略：
 
-  * 一般建议 16–32；
-* 队列发送策略：
-
-  * 任务上下文发送可设短超时（如 10–50 ms），避免长时间阻塞；
-  * ISR 中发送使用无阻塞 API，发送失败则丢弃并在 Debug 里统计；
+  * 任务上下文发送时使用短超时（10–50 ms）；
+  * 中断中发送使用无阻塞 API，失败则丢弃并计数。
 * 互斥量：
 
-  * `fs_mutex`：保护 FATFS/文件系统操作；
-  * `config_mutex`：保护 NVS 配置读写；
-* 事件优先级原则：
-
-  * 输入事件 > 状态机更新 > UI 刷新 > 心跳 > 日志；
-  * 所有输入事件建议先进入 SYS_TASK，由 SYS_TASK 根据当前模式分发，避免各模块直接抢占处理。
+  * `fs_mutex`：保护 FATFS；
+  * `config_mutex`：保护 NVS 配置读写。
 
 ### 12.3 看门狗（WDT）
 
-* 启用系统 Watchdog 和 Task Watchdog；
-* 对关键任务（SYS_TASK、UI_TASK、SENSOR_TASK 等）设置常规超时（如 1–2 s）；
-* 对 LOG_TASK：
-
-  * 由于涉及 SD 写入，`f_write/f_sync` 偶尔可能阻塞数百 ms，Task WDT 超时需适当放宽（如≥5 s）；
-  * LOG_TASK 不应在 SD 写入期间持有其他关键互斥锁，防止级联阻塞；
-* Debug 页面中显示最近一次 WDT 触发信息（如有）。
+* 启用系统 WDT 和 Task WDT；
+* 关键任务（SYS_TASK、UI_TASK、SENSOR_TASK 等）WDT 超时设置 1–2 s；
+* LOG_TASK 因 SD 写入延迟不确定，WDT 超时适当放宽（≥ 5 s），并避免在写入时持有其它关键锁。
 
 ### 12.4 电源管理与 BAT_ADC
 
-* POWER_TASK 以 1–5 Hz 采样 BAT_ADC：
+* POWER_TASK 以 1–5 Hz 采样电池电压：
 
-  * 使用移动平均滤波（例如 8 点窗口）；
-* 阈值建议（可配置）：
+  * 使用移动平均（如 8 点窗口）；
+* 阈值示例：
 
   * 低电量提示：`Vbat < 3.4 V`；
-  * 低电模式：`Vbat < 3.3 V` 时可自动降低背光亮度、关闭高功耗功能；
-  * 安全关机：`Vbat < 3.2 V` 时执行：
-
-    * 停止 GPX 记录并 flush 缓冲；
-    * 保存必要配置；
-    * 显示关机提示后重启或进入深度睡眠（具体行为可在实现中决定）。
+  * 低电模式：`Vbat < 3.3 V`，可降低屏幕亮度、关闭高功耗功能；
+  * 安全关机：`Vbat < 3.2 V`，停止记录、保存配置，提示后关机或睡眠。
 * CHRG_STATUS：
 
-  * 硬件确定 0/1 表示“充电中/未充电”的语义；
-  * 软件中在注释里固定说明，并在“外设状态”页显示 `chg=0/1` 及相应文字（如“充电中/未充电”）。
+  * 硬件定义 0/1 对应“充电中/未充电”，软件中注释明确；
+  * 外设状态页面显示 `chg=0/1` 及中文状态。
 
-### 12.5 配置存储与 NVS 分区
+### 12.5 配置存储与 NVS
 
-* 配置统一保存在 NVS 中：
+* 所有配置统一保存在 NVS：
 
-  * 包括 GNSS 模式、Auto Pause/Lap 参数、显示设置、P-GEAR 设置、MAG 校准数据等；
-* 配置结构统一带版本号，例如：
+  * GNSS 模式与更新率；
+  * Auto Pause / Auto Lap 参数；
+  * 显示与背光设置；
+  * P-GEAR 设置与历史；
+  * MAG 校准数据等。
+* 配置结构需包含版本号：
 
 ```c
 typedef struct {
-    uint16_t version;    // 配置版本号
-    // 后续字段...
+    uint16_t version;
+    // 其它字段...
 } app_config_t;
 ```
 
-* 当读取到的版本号与当前固件不匹配：
+* 版本不匹配时：
 
   * 使用默认配置；
-  * 覆盖 NVS 中旧配置。
-* 分区建议：
-
-  * 在 `partitions.csv` 中为 NVS 预留至少 16 KB；
-  * 若未来需要频繁持久化大数据（如里程/历史记录），可增加独立 NVS 分区。
+  * 重写 NVS，防止旧版本结构不兼容。
+* `partitions.csv` 中为 NVS 预留至少 16 KB，如有需要可增加独立配置分区。
 
 ### 12.6 启动流程与自检
 
-* 启动流程建议：
+1. 上电 → 显示 Logo 或启动画面；
+2. 初始化 UART0、GPIO、I2C、SDMMC、背光；
+3. 初始化 NVS，读取配置，若失败尝试擦除重建；
+4. 初始化各外设模块（GNSS/IMU/MAG/BARO/SD）：
 
-  1. 上电 → 显示 Logo/启动画面（1–2 s，可选）。
-  2. 初始化基础外设：UART0、GPIO、I2C 总线、SDMMC、背光。
-  3. 初始化 NVS，读取配置；如失败，尝试擦除指定分区后重建。
-  4. 初始化 GNSS/IMU/MAG/BARO/SD 卡：
+   * 某模块失败时标记不可用，不阻塞其它模块启动；
+5. 初始化 DataModel；
+6. 初始化 UI/LVGL/LovyanGFX，进入主菜单。
 
-     * 某模块失败时：
+自检失败降级：
 
-       * 标记该模块为“不可用”；
-       * 记录日志；
-       * 不影响其他模块启动。
-  5. 初始化 UI & LVGL & LovyanGFX，创建主菜单。
-* 自检失败降级策略：
-
-  * 例如 SD 初始化失败但其他模块正常：
-
-    * 禁用 GPX 记录；
-    * 保留 BIKE、P-GEAR 等功能；
+* SD 挂载失败 → 禁用 GPX 记录，但 BIKE/P-GEAR 仍可用；
+* GNSS 失败 → BIKE 显示基本传感器信息，但缺失 GNSS 相关功能。
 
 ### 12.7 资源共享与模式切换
 
-* GNSS/IMU/MAG/BARO 采样任务常驻运行，不因模式切换而停；
-* SD/GPX 写入仅在 GPX_RECORDING 状态下活跃，其他模式只读 SD（如浏览 GPX 列表）；
-* UI 切换页面时：
-
-  * 尽量重用缓存数据，不强制刷新所有内容；
-  * 动画效果可以简单（淡入/淡出或直接切换），不做强制要求；
-* 模式切换时共享资源注意：
-
-  * 确保文件操作在 LOG_TASK 中序列化；
-  * 避免在多个任务中直接打开/关闭同一文件对象。
+* GNSS/传感器任务常驻运行，不随模式切换停；
+* SD 写入主要在 GPX 记录与日志写入中使用；
+* UI 页面切换时尽量复用控件，避免频繁创建销毁；
+* 文件操作集中在 LOG_TASK 中经 `fs_mutex` 串行执行。
 
 ---
 
-## 13. 编码规范与代码风格
+## 13. 编码规范与风格
 
-1. 源码统一 UTF-8，禁止使用 GBK 等其它编码。
-2. 注释必须使用中文，要求简明说明函数用途、参数、返回值和注意事项。
-3. 标识符统一英文：
+1. 源文件须使用 UTF-8 编码，禁止使用 GBK 等其他编码；
+2. 注释必须为简体中文，说明函数用途、参数、返回值与注意事项；
+3. 命名：
 
-   * 函数、变量：`lower_snake_case`；
-   * 宏常量：`UPPER_SNAKE_CASE`；
-   * 类型：`xxx_t`。
-4. 所有公共函数必须在唯一的 `.h` 中声明；
-5. 所有模块内部函数必须使用 `static` 限定；
-6. 禁止两个 `.c` 文件中定义同名非 static 函数；
-7. 缩进统一 4 个空格，不使用 Tab；
-8. 控制结构统一格式，例如：
+   * 函数/变量：`lower_snake_case`；
+   * 宏：`UPPER_SNAKE_CASE`；
+   * 类型：`xxx_t`；
+4. 所有公共函数在唯一 `.h` 中声明；
+5. 模块内部函数必须使用 `static` 修饰；
+6. 禁止两个 `.c` 文件中存在同名非 static 函数；
+7. 缩进统一为 4 个空格，不使用 Tab；
+8. 函数尽量短小，避免深层嵌套，除任务循环外避免长时间阻塞；
+9. 建议使用 `.clang-format` 固定格式风格。
+
+### 13.1 I2C 旧 API 禁用
+
+* 工程中严禁使用：
+
+  * 头文件：`driver/i2c.h`；
+  * 函数：`i2c_master_cmd_begin` 等旧接口。
+* 若代码中发现上述符号，视为不符合 SRS，必须整改。
+
+### 13.2 错误处理宏（CHECK_ERR）
+
+* 工程统一使用 `app_check.h` 中的 CHECK 宏：
 
 ```c
-if (cond) {
-    // ...
-} else {
-    // ...
-}
+#define CHECK_ESP_RETURN(expr)                                   \
+    do {                                                         \
+        esp_err_t _err = (expr);                                 \
+        if (_err != ESP_OK) {                                    \
+            ESP_LOGE("CHECK", "ESP err %d at %s:%d",             \
+                     _err, __FILE__, __LINE__);                  \
+            return _err;                                         \
+        }                                                        \
+    } while (0)
 ```
 
-9. 函数应尽量短小，避免过深嵌套；除任务主循环外尽量避免长时间阻塞；
-10. 建议提供 `.clang-format` 配置（参考 Espressif 示例工程风格）。
+* 所有 ESP-IDF 调用必须用 CHECK 宏进行错误处理，禁止“裸奔”。
 
 ---
 
 ## 14. 安全与故障模式
 
-* 超长按（ULTRA, ≥8 s）：
+* 超长按（ULTRA）：
 
-  * 作为预留事件，本版本不绑定具体动作；
-  * 后续版本可扩展为“恢复出厂设置+重启”等，需要在 SRS 中明确擦除范围（哪些 NVS 键）。
-* 模块异常：
+  * 定义为 ≥ 8 s；
+  * 本版本预留，不做具体行为（未来可扩展为恢复出厂等）。
+* 模块初始化失败：
 
-  * 初始化失败最多重试 3 次；
-  * 仍失败则标记“不可用”，不反复尝试导致阻塞。
+  * 最多重试 3 次；
+  * 失败后标记“不可用”，不持续重试。
 * 看门狗：
 
-  * 系统与任务 WDT 启用；
-  * LOG_TASK WDT 超时设置较长；
-  * Watchdog 相关信息在 Debug 页面展示。
+  * 启用系统 WDT 和 Task WDT；
+  * LOG_TASK WDT 超时比其它任务长；
+  * Debug 页面展示最近 WDT 触发信息。
 * 故障降级：
 
-  * SD 故障：禁用 GPX 记录，但保留其它功能；
-  * GNSS 故障：BIKE 仍可使用 IMU/气压高度显示部分数据，但速度/导航类功能受限；
-  * 传感器故障：相关页面明确显示“数据无效”。
+  * SD 故障 → 禁用 GPX，保留其他功能；
+  * GNSS 故障 → 保留传感器显示和部分功能；
+  * 传感器故障 → UI / 状态页面标明“数据无效”。
+
+---
+
+## 15. 数据中心（DataModel / Context Manager）
+
+为降低模块耦合、提升 AI 生成代码的稳定性，引入统一数据中心 DataModel。
+
+### 15.1 概述
+
+* 定义全局单例结构体 `app_data_model_t`，作为系统运行状态快照；
+* 采集/业务模块只**写入** DataModel；
+* UI/心跳/Debug 只**读取** DataModel；
+* 模块之间禁止直接 `extern` 访问其他模块内部全局。
+
+### 15.2 app_data_model_t 示例定义
+
+```c
+typedef enum {
+    MODE_MAIN_MENU = 0,
+    MODE_BIKE,
+    MODE_GPX,
+    MODE_PGEAR,
+} system_mode_t;
+
+typedef struct {
+    float   speed_kmh;
+    float   avg_speed_kmh;
+    float   max_speed_kmh;
+    float   trip_distance_km;
+    float   total_distance_km;
+    uint32_t ride_time_s;
+    uint32_t total_time_s;
+    uint16_t lap_count;
+} bike_runtime_t;
+
+typedef struct {
+    bool     recording;
+    bool     paused;
+    char     current_file[32];
+    float    distance_km;
+} gpx_runtime_t;
+
+typedef struct {
+    pgear_state_t state;
+    float         v_start_kmh;
+    float         v_end_kmh;
+    float         cur_speed_kmh;
+    float         last_time_s;
+    float         best_time_s;
+} pgear_runtime_t;
+
+typedef struct {
+    float    vbat;
+    bool     charging;
+    uint8_t  batt_level;
+} power_status_t;
+
+typedef struct {
+    gnss_fix_t        gnss;
+    sensor_sample_t   sensor;
+    bike_runtime_t    bike;
+    gpx_runtime_t     gpx;
+    pgear_runtime_t   pgear;
+    power_status_t    power;
+    system_mode_t     mode;
+    uint32_t          last_update_ms;
+} app_data_model_t;
+```
+
+> 说明：实际字段可根据需要增删，但所有跨模块共享数据必须通过 DataModel 映射。
+
+### 15.3 读写职责
+
+**写入者（Producer）：**
+
+* `GNSS_TASK`：解析数据后写 `data_model.gnss`；
+* `SENSOR_TASK`：采样 + Mahony 后写 `data_model.sensor`；
+* `SYS_TASK`：根据输入事件和状态机逻辑，更新：
+
+  * `mode`、`bike`、`gpx`、`pgear` 等；
+* `POWER_TASK`：更新 `power`（电压、电量、充电状态）。
+
+**读取者（Consumer）：**
+
+* `UI_TASK`：周期读取 DataModel，调用各页面 `ui_xxx_update(&data_model)`；
+* `HEARTBEAT_TASK`：读取 DataModel 生成心跳日志；
+* Debug 页面：读取 DataModel 显示状态。
+
+### 15.4 并发与锁策略
+
+* 单字段写入多为原子操作；
+* 强一致性需求（如一组统计）应在同一任务（如 SYS_TASK）中集中更新；
+* UI/心跳读取 DataModel 视为近实时快照，不追求强同步；
+* 如有需要，可外围加轻量 mutex，但非强制要求。
+
+### 15.5 模块间通信约束
+
+* 禁止 `ui_*.c` 中 `extern` 其他模块全局变量；
+* 禁止 `gnss.c`、`sensor.c` 等业务模块相互直接访问对方内部静态数据；
+* 所有模块之间：
+
+  * 状态共享：统一通过 DataModel；
+  * 行为请求：通过事件队列（input_event_queue、gnss_event_queue 等）传递给 SYS_TASK，再由 SYS_TASK 修改 DataModel。
 
 ---
