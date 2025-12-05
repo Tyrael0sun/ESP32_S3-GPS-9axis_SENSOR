@@ -80,6 +80,19 @@
 * 方向：竖屏，软件配置旋转 180°
 * 接口：SPI3 + 背光 PWM（GPIO9，2 kHz，默认 50%）
 
+### 1.3 I2C 软件接口要求
+
+* 所有 I2C 主机访问必须使用 **ESP-IDF v6.0 及以上版本提供的新 I2C 总线/设备驱动接口**（头文件 `driver/i2c_master.h`），**禁止**使用旧版遗留接口 `driver/i2c.h`。
+* I2C 总线初始化流程必须遵循“总线-设备”模型：
+  * 使用 `i2c_new_master_bus()` 创建 I2C 主机总线句柄 `i2c_master_bus_handle_t`；
+  * 使用 `i2c_master_bus_add_device()` 为每个外设（IMU/MAG/BARO 等）创建 `i2c_master_dev_handle_t` 设备句柄。
+* I2C 读写操作统一使用以下函数族，不得再使用旧函数名：
+  * 写：`i2c_master_transmit()`
+  * 读：`i2c_master_receive()`
+  * 先写后读：`i2c_master_transmit_receive()`
+* 若需要探测设备地址或扫描总线，应使用 `i2c_master_probe()` 等新版 API；不得自行构造旧版 `i2c_cmd_handle_t` 链表。
+* 新旧驱动 **不能同时使用**，本项目所有 I2C 相关代码必须只包含 `driver/i2c_master.h`（以及必要的 `i2c_types.h`），不得再 include `driver/i2c.h`。
+
 ---
 
 ## 2. 输入设备与交互逻辑
